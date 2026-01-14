@@ -1,24 +1,60 @@
-# LLM Council
+# RIA Automation Project
 
-![llmcouncil](header.jpg)
+Automated Regulatory Impact Assessment (RIA) system using LLM Council architecture with Meta-Chairman synthesis, bootstrap evaluation contexts, and human-in-the-loop validation.
 
-The idea of this repo is that instead of asking a question to your favorite LLM provider (e.g. OpenAI GPT 5.1, Google Gemini 3.0 Pro, Anthropic Claude Sonnet 4.5, xAI Grok 4, eg.c), you can group them into your "LLM Council". This repo is a simple, local web app that essentially looks like ChatGPT except it uses OpenRouter to send your query to multiple LLMs, it then asks them to review and rank each other's work, and finally a Chairman LLM produces the final response.
+## Overview
 
-In a bit more detail, here is what happens when you submit a query:
+This project modernizes and partially automates the Regulatory Impact Analysis (RIA) workflow used across Belgian federal administrations. It enhances quality, consistency, and analytical depth while reducing manual workload through:
 
-1. **Stage 1: First opinions**. The user query is given to all LLMs individually, and the responses are collected. The individual responses are shown in a "tab view", so that the user can inspect them all one by one.
-2. **Stage 2: Review**. Each individual LLM is given the responses of the other LLMs. Under the hood, the LLM identities are anonymized so that the LLM can't play favorites when judging their outputs. The LLM is asked to rank them in accuracy and insight.
-3. **Stage 3: Final response**. The designated Chairman of the LLM Council takes all of the model's responses and compiles them into a single final answer that is presented to the user.
+- **LLM Council Architecture**: Multi-model deliberation with 3-stage process (First Opinion, Peer Review, Synthesis)
+- **Meta-Chairman Model**: Dedicated synthesis model excluded from deliberation to ensure neutrality
+- **Bootstrap Evaluation Contexts**: Reduces bias through varied evaluation criteria, randomized order, and consensus aggregation
+- **Human-in-the-Loop (HITL)**: Strategic validation points ensuring accuracy and accountability
+- **Knowledge Base Integration**: Vector database and knowledge graph for RIA document management
 
-## Vibe Code Alert
+## Architecture
 
-This project was 99% vibe coded as a fun Saturday hack because I wanted to explore and evaluate a number of LLMs side by side in the process of [reading books together with LLMs](https://x.com/karpathy/status/1990577951671509438). It's nice and useful to see multiple responses side by side, and also the cross-opinions of all LLMs on each other's outputs. I'm not going to support it in any way, it's provided here as is for other people's inspiration and I don't intend to improve it. Code is ephemeral now and libraries are over, ask your LLM to change it in whatever way you like.
+### LLM Council Process
+
+1. **Stage 1: First Opinions** - All council models generate independent responses
+2. **Stage 2: Peer Review** - Bootstrap evaluation with varied criteria and aggregated rankings
+3. **Stage 3: Meta-Chairman Synthesis** - Dedicated chairman model produces final response
+
+See [META_CHAIRMAN_FLOW.md](./META_CHAIRMAN_FLOW.md) for detailed process flow.
+
+### Key Features
+
+- **Bootstrap Evaluation**: Multiple iterations with varying criteria reduce pattern recognition bias
+- **Meta-Chairman Separation**: Chairman model does not participate in Stages 1 or 2
+- **Belgian RIA Framework**: Supports 21 standardized impact categories
+- **EU Alignment**: Knowledge graph mapping Belgian categories to EU Impact Assessment framework
+- **Document Processing**: PDF and DOCX extraction with OCR support
+
+## Project Structure
+
+```
+├── backend/              # FastAPI backend with LLM Council logic
+│   ├── config.py        # Model configuration and bootstrap settings
+│   ├── council.py       # 3-stage deliberation orchestration
+│   └── main.py          # API server
+├── frontend/            # React frontend
+├── PROJECT_BLUEPRINT.md # Comprehensive system architecture
+├── PROJECT_DRAFT.md     # Project understanding and implementation tracks
+├── functional_analysis.md # Functional analysis methodology
+└── pdf_reader.py        # PDF text extraction and OCR tool
+```
+
+## Documentation
+
+- **[PROJECT_BLUEPRINT.md](./PROJECT_BLUEPRINT.md)**: Complete system architecture, requirements, and implementation phases
+- **[PROJECT_DRAFT.md](./PROJECT_DRAFT.md)**: Project understanding, HITL philosophy, and implementation strategies
+- **[META_CHAIRMAN_FLOW.md](./META_CHAIRMAN_FLOW.md)**: Detailed Meta-Chairman process flow
+- **[RIA_STRUCTURE_COMPARISON.md](./RIA_STRUCTURE_COMPARISON.md)**: Belgian vs EU RIA structure analysis
+- **[functional_analysis.md](./functional_analysis.md)**: Functional analysis methodology guide
 
 ## Setup
 
 ### 1. Install Dependencies
-
-The project uses [uv](https://docs.astral.sh/uv/) for project management.
 
 **Backend:**
 ```bash
@@ -40,22 +76,11 @@ Create a `.env` file in the project root:
 OPENROUTER_API_KEY=sk-or-v1-...
 ```
 
-Get your API key at [openrouter.ai](https://openrouter.ai/). Make sure to purchase the credits you need, or sign up for automatic top up.
+Get your API key at [openrouter.ai](https://openrouter.ai/).
 
-### 3. Configure Models (Optional)
+### 3. Configure Models
 
-Edit `backend/config.py` to customize the council:
-
-```python
-COUNCIL_MODELS = [
-    "openai/gpt-5.1",
-    "google/gemini-3-pro-preview",
-    "anthropic/claude-sonnet-4.5",
-    "x-ai/grok-4",
-]
-
-CHAIRMAN_MODEL = "google/gemini-3-pro-preview"
-```
+Edit `backend/config.py` to customize the council and chairman models. The Meta-Chairman must be separate from council models.
 
 ## Running the Application
 
@@ -79,9 +104,20 @@ npm run dev
 
 Then open http://localhost:5173 in your browser.
 
+## Implementation Tracks
+
+- **Track 1**: LLM-based prompting for direct impact classification
+- **Track 1 Phase 2**: EU Impact Assessment as gold standard with graph-based mapping
+- **Track 3**: Neural network classification with LLM-driven reporting
+- **Track 4**: RIA/SDG dashboard integration and visualization
+
 ## Tech Stack
 
 - **Backend:** FastAPI (Python 3.10+), async httpx, OpenRouter API
-- **Frontend:** React + Vite, react-markdown for rendering
-- **Storage:** JSON files in `data/conversations/`
+- **Frontend:** React + Vite, react-markdown
+- **Storage:** JSON files (future: vector database, knowledge graph)
 - **Package Management:** uv for Python, npm for JavaScript
+
+## License
+
+This project builds upon the [llm-council](https://github.com/karpathy/llm-council) architecture by Andrej Karpathy.
