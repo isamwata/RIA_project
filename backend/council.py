@@ -1,8 +1,17 @@
-"""3-stage LLM Council orchestration."""
+"""3-stage LLM Council orchestration with bootstrap evaluation contexts."""
 
+import random
 from typing import List, Dict, Any, Tuple
+from collections import defaultdict
 from .openrouter import query_models_parallel, query_model
-from .config import COUNCIL_MODELS, CHAIRMAN_MODEL
+from .config import (
+    COUNCIL_MODELS, 
+    CHAIRMAN_MODEL,
+    ENABLE_BOOTSTRAP_EVALUATION,
+    BOOTSTRAP_ITERATIONS,
+    EVALUATION_CRITERIA,
+    BOOTSTRAP_AGGREGATION_METHOD
+)
 
 
 async def stage1_collect_responses(user_query: str) -> List[Dict[str, Any]]:
@@ -32,36 +41,193 @@ async def stage1_collect_responses(user_query: str) -> List[Dict[str, Any]]:
     return stage1_results
 
 
+def _generate_evaluation_prompt(
+    user_query: str,
+    responses_text: str,
+    criterion: Dict[str, str]
+) -> str:
+    """
+    Generate an evaluation prompt based on a specific criterion.
+    
+    Args:
+        user_query: The original user query
+        responses_text: Formatted responses text
+        criterion: Dictionary with 'name', 'focus', and 'description'
+    
+    Returns:
+        Formatted evaluation prompt
+    """
+    return f"""You are evaluating responses for {criterion['focus']}.
+
+Question: {user_query}
+
+Here are the responses from different models (anonymized):
+
+{responses_text}
+
+Your task:
+1. Evaluate each response based on {criterion['description']}.
+2. For each response, explain what it does well and what it does poorly, focusing on {criterion['focus']}.
+3. Then, at the very end of your response, provide a final ranking.
+
+IMPORTANT: Your final ranking MUST be formatted EXACTLY as follows:
+- Start with the line "FINAL RANKING:" (all caps, with colon)
+- Then list the responses from best to worst as a numbered list
+- Each line should be: number, period, space, then ONLY the response label (e.g., "1. Response A")
+- Do not add any other text or explanations in the ranking section
+
+Example of the correct format for your ENTIRE response:
+
+Response A provides good detail on X but misses Y...
+Response B is accurate but lacks depth on Z...
+Response C offers the most comprehensive answer...
+
+FINAL RANKING:
+1. Response C
+2. Response A
+3. Response B
+
+Now provide your evaluation and ranking focusing on {criterion['focus']}:"""
+
+
+def _shuffle_responses_order(
+    labels: List[str],
+    stage1_results: List[Dict[str, Any]]
+) -> Tuple[List[str], List[Dict[str, Any]]]:
+    """
+    Shuffle the order of responses while maintaining label-response pairing.
+    
+    Args:
+        labels: List of response labels
+        stage1_results: List of response dictionaries
+    
+    Returns:
+        Tuple of (shuffled_labels, shuffled_results)
+    """
+    # Create pairs and shuffle
+    pairs = list(zip(labels, stage1_results))
+    random.shuffle(pairs)
+    shuffled_labels, shuffled_results = zip(*pairs)
+    return list(shuffled_labels), list(shuffled_results)
+
+
+def _aggregate_bootstrap_rankings_borda(
+    bootstrap_results: List[Dict[str, Any]],
+    num_responses: int
+) -> Dict[str, float]:
+    """
+    Aggregate bootstrap rankings using Borda Count method.
+    
+    Args:
+        bootstrap_results: List of ranking results from bootstrap iterations
+        num_responses: Total number of responses being ranked
+    
+    Returns:
+        Dictionary mapping response labels to Borda scores
+    """
+    label_scores = defaultdict(float)
+    
+    for result in bootstrap_results:
+        parsed_ranking = result.get('parsed_ranking', [])
+        for position, label in enumerate(parsed_ranking, start=1):
+            # Borda count: 1st place gets N points, 2nd gets N-1, etc.
+            points = num_responses - position + 1
+            label_scores[label] += points
+    
+    return dict(label_scores)
+
+
+def _aggregate_bootstrap_rankings_position_average(
+    bootstrap_results: List[Dict[str, Any]]
+) -> Dict[str, float]:
+    """
+    Aggregate bootstrap rankings using position averaging.
+    
+    Args:
+        bootstrap_results: List of ranking results from bootstrap iterations
+    
+    Returns:
+        Dictionary mapping response labels to average positions
+    """
+    label_positions = defaultdict(list)
+    
+    for result in bootstrap_results:
+        parsed_ranking = result.get('parsed_ranking', [])
+        for position, label in enumerate(parsed_ranking, start=1):
+            label_positions[label].append(position)
+    
+    # Calculate average position for each label
+    label_averages = {}
+    for label, positions in label_positions.items():
+        label_averages[label] = sum(positions) / len(positions)
+    
+    return label_averages
+
+
+def _aggregate_bootstrap_rankings_consensus_score(
+    bootstrap_results: List[Dict[str, Any]],
+    num_responses: int
+) -> Dict[str, float]:
+    """
+    Aggregate bootstrap rankings using consensus scoring.
+    Rewards consistent high rankings.
+    
+    Args:
+        bootstrap_results: List of ranking results from bootstrap iterations
+        num_responses: Total number of responses being ranked
+    
+    Returns:
+        Dictionary mapping response labels to consensus scores
+    """
+    label_scores = defaultdict(float)
+    
+    for result in bootstrap_results:
+        parsed_ranking = result.get('parsed_ranking', [])
+        for position, label in enumerate(parsed_ranking, start=1):
+            # Consensus score: higher positions get exponentially more weight
+            # 1st = 3 points, 2nd = 2 points, 3rd = 1 point (for 3 responses)
+            points = num_responses - position + 1
+            label_scores[label] += points
+    
+    return dict(label_scores)
+
+
 async def stage2_collect_rankings(
     user_query: str,
     stage1_results: List[Dict[str, Any]]
 ) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
     """
-    Stage 2: Each model ranks the anonymized responses.
-
+    Stage 2: Each model ranks the anonymized responses using bootstrap evaluation contexts.
+    
+    This implements bootstrap evaluation contexts to reduce pattern recognition bias:
+    - Varies evaluation criteria (accuracy, completeness, clarity, utility, balanced)
+    - Varies response presentation order
+    - Aggregates rankings using consensus methods
+    
     Args:
         user_query: The original user query
         stage1_results: Results from Stage 1
-
+    
     Returns:
         Tuple of (rankings list, label_to_model mapping)
     """
     # Create anonymized labels for responses (Response A, Response B, etc.)
     labels = [chr(65 + i) for i in range(len(stage1_results))]  # A, B, C, ...
-
+    
     # Create mapping from label to model name
     label_to_model = {
         f"Response {label}": result['model']
         for label, result in zip(labels, stage1_results)
     }
-
-    # Build the ranking prompt
-    responses_text = "\n\n".join([
-        f"Response {label}:\n{result['response']}"
-        for label, result in zip(labels, stage1_results)
-    ])
-
-    ranking_prompt = f"""You are evaluating different responses to the following question:
+    
+    if not ENABLE_BOOTSTRAP_EVALUATION:
+        # Fallback to original single evaluation method
+        responses_text = "\n\n".join([
+            f"Response {label}:\n{result['response']}"
+            for label, result in zip(labels, stage1_results)
+        ])
+        
+        ranking_prompt = f"""You are evaluating different responses to the following question:
 
 Question: {user_query}
 
@@ -92,23 +258,151 @@ FINAL RANKING:
 
 Now provide your evaluation and ranking:"""
 
-    messages = [{"role": "user", "content": ranking_prompt}]
-
-    # Get rankings from all council models in parallel
-    responses = await query_models_parallel(COUNCIL_MODELS, messages)
-
-    # Format results
+        messages = [{"role": "user", "content": ranking_prompt}]
+        responses = await query_models_parallel(COUNCIL_MODELS, messages)
+        
+        stage2_results = []
+        for model, response in responses.items():
+            if response is not None:
+                full_text = response.get('content', '')
+                parsed = parse_ranking_from_text(full_text)
+                stage2_results.append({
+                    "model": model,
+                    "ranking": full_text,
+                    "parsed_ranking": parsed
+                })
+        
+        return stage2_results, label_to_model
+    
+    # Bootstrap evaluation contexts implementation
+    all_bootstrap_results = []
+    
+    # Determine number of iterations and criteria to use
+    num_iterations = min(BOOTSTRAP_ITERATIONS, len(EVALUATION_CRITERIA))
+    criteria_to_use = EVALUATION_CRITERIA[:num_iterations]
+    
+    # If we need more iterations than criteria, cycle through criteria
+    if BOOTSTRAP_ITERATIONS > len(EVALUATION_CRITERIA):
+        criteria_to_use = (EVALUATION_CRITERIA * ((BOOTSTRAP_ITERATIONS // len(EVALUATION_CRITERIA)) + 1))[:BOOTSTRAP_ITERATIONS]
+    
+    # Run bootstrap iterations
+    for iteration in range(BOOTSTRAP_ITERATIONS):
+        criterion = criteria_to_use[iteration]
+        
+        # Vary response order for each iteration
+        shuffled_labels, shuffled_results = _shuffle_responses_order(labels.copy(), stage1_results.copy())
+        
+        # Build responses text with shuffled order
+        responses_text = "\n\n".join([
+            f"Response {label}:\n{result['response']}"
+            for label, result in zip(shuffled_labels, shuffled_results)
+        ])
+        
+        # Generate evaluation prompt with specific criterion
+        ranking_prompt = _generate_evaluation_prompt(user_query, responses_text, criterion)
+        
+        messages = [{"role": "user", "content": ranking_prompt}]
+        
+        # Get rankings from all council models in parallel for this iteration
+        responses = await query_models_parallel(COUNCIL_MODELS, messages)
+        
+        # Store results with iteration metadata
+        for model, response in responses.items():
+            if response is not None:
+                full_text = response.get('content', '')
+                parsed = parse_ranking_from_text(full_text)
+                
+                # Map shuffled labels back to original labels for consistency
+                # Create reverse mapping from shuffled to original
+                shuffled_to_original = {
+                    shuffled_labels[i]: labels[i]
+                    for i in range(len(labels))
+                }
+                
+                # Convert parsed ranking back to original labels
+                original_parsed = [
+                    shuffled_to_original.get(label, label)
+                    for label in parsed
+                    if label in shuffled_to_original
+                ]
+                
+                all_bootstrap_results.append({
+                    "model": model,
+                    "ranking": full_text,
+                    "parsed_ranking": original_parsed,
+                    "iteration": iteration,
+                    "criterion": criterion['name'],
+                    "order": shuffled_labels.copy()
+                })
+    
+    # Aggregate bootstrap rankings for each model
     stage2_results = []
-    for model, response in responses.items():
-        if response is not None:
-            full_text = response.get('content', '')
-            parsed = parse_ranking_from_text(full_text)
-            stage2_results.append({
-                "model": model,
-                "ranking": full_text,
-                "parsed_ranking": parsed
-            })
-
+    models_seen = set()
+    
+    for model in COUNCIL_MODELS:
+        if model in models_seen:
+            continue
+        models_seen.add(model)
+        
+        # Get all bootstrap results for this model
+        model_bootstrap_results = [
+            r for r in all_bootstrap_results
+            if r['model'] == model
+        ]
+        
+        if not model_bootstrap_results:
+            continue
+        
+        # Aggregate rankings based on configured method
+        if BOOTSTRAP_AGGREGATION_METHOD == "borda_count":
+            aggregated_scores = _aggregate_bootstrap_rankings_borda(
+                model_bootstrap_results,
+                len(stage1_results)
+            )
+        elif BOOTSTRAP_AGGREGATION_METHOD == "position_average":
+            aggregated_scores = _aggregate_bootstrap_rankings_position_average(
+                model_bootstrap_results
+            )
+        elif BOOTSTRAP_AGGREGATION_METHOD == "consensus_score":
+            aggregated_scores = _aggregate_bootstrap_rankings_consensus_score(
+                model_bootstrap_results,
+                len(stage1_results)
+            )
+        else:
+            # Default to Borda count
+            aggregated_scores = _aggregate_bootstrap_rankings_borda(
+                model_bootstrap_results,
+                len(stage1_results)
+            )
+        
+        # Sort labels by aggregated score (higher is better for Borda/Consensus, lower for average)
+        if BOOTSTRAP_AGGREGATION_METHOD == "position_average":
+            sorted_labels = sorted(aggregated_scores.items(), key=lambda x: x[1])
+        else:
+            sorted_labels = sorted(aggregated_scores.items(), key=lambda x: x[1], reverse=True)
+        
+        final_ranking = [label for label, score in sorted_labels]
+        
+        # Create aggregated ranking text
+        ranking_text_parts = [
+            f"Bootstrap Evaluation Summary (Method: {BOOTSTRAP_AGGREGATION_METHOD})",
+            f"Iterations: {len(model_bootstrap_results)}",
+            f"Criteria used: {', '.join(set(r['criterion'] for r in model_bootstrap_results))}",
+            "",
+            "FINAL RANKING:"
+        ]
+        ranking_text_parts.extend([
+            f"{i+1}. {label}" for i, label in enumerate(final_ranking)
+        ])
+        
+        stage2_results.append({
+            "model": model,
+            "ranking": "\n".join(ranking_text_parts),
+            "parsed_ranking": final_ranking,
+            "bootstrap_iterations": len(model_bootstrap_results),
+            "aggregation_method": BOOTSTRAP_AGGREGATION_METHOD
+        })
+    
     return stage2_results, label_to_model
 
 

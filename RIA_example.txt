@@ -1,0 +1,149 @@
+Integrated Impact Assessment
+Descriptive Sheet
+A. Author
+Competent government member  
+Federal Public Service Employment, Labor, and Social Dialogue
+Policy cell contact person  
+Name:
+Florence LEPOIVRE
+Email: Florence.Lepoivre@dermagne.fed.be
+Tel.: +32 2 207 16 15
+Public service  
+AG Collective Labour Relations
+Public service contact person  
+Name:
+Guy VAN GYES
+Email: guy.vangyes@werk.belgie.be
+Tel.: 02/233.40.50
+B. Draft
+Title of the regulation  
+The preliminary draft law concerning the introduction of an electronic application called “Federal Learning Account”.
+Short description of the draft regulation, including its origin (treaty, directive, cooperation agreement, current events, ...), and the intended implementation goals.
+The preliminary draft law aims to establish this Federal Learning Account and pays particular attention to the automated processing of personal data of employees included in this digital application. The law intends to create a legal obligation for data controllers to register and manage personal data.
+The application will allow employees and employers to manage and track individual training rights and sectoral training rights, and to inform employees about them.
+The application also provides employees, employers, and other authorized actors with information about the training days to which the employee is entitled, the training days taken, the training courses followed, as well as information about the training credit. Given the importance of training for individuals and the labour market, it is necessary that these data remain available throughout the entire career of persons active on the Belgian labour market. This means that the data in the Federal Learning Account must be available not only for employees but also for persons who, for example, were previously employees and have transitioned to self‑employment. This allows these persons to access their data should they wish to be employed again as workers.
+Impact analyses already carried out:  
+☐ Yes
+☒ No
+C. Consultation on the draft regulation
+Mandatory, optional, or informal consultations:
+NAR – GBA
+D. Sources used to carry out the impact analysis
+Statistics, reference documents, organizations, and reference persons:
+None
+What impact does the draft regulation have on these 21 themes?
+1. Combating poverty
+☒ Positive impact
+☐ Negative impact
+☐ No impact
+Explain  
+Training of employees is essential for the proper functioning of the labour market.
+In 2017, this was reaffirmed at the European level by establishing, as the first principle of the European Pillar of Social Rights, the right to high‑quality and inclusive education, training, and lifelong learning to acquire and maintain skills. A trained employee has a better chance of finding a quality job, thereby reducing the risk of poverty.
+2. Equal opportunities and social cohesion
+☒ Positive impact
+☐ Negative impact
+☐ No impact
+Explain  
+Training of employees is essential for the proper functioning of the labour market.
+In 2017, this was reaffirmed at the European level by establishing, as the first principle of the European Pillar of Social Rights, the right to high‑quality and inclusive education, training, and lifelong learning to acquire and maintain skills. A trained employee has a better chance of finding a quality job, thereby reducing the risk of poverty.
+3. Equality between women and men
+Which persons are directly or indirectly affected by the draft, and what is the gender composition of these groups?  
+☒ Persons are involved
+☐ Persons are not involved
+Describe and indicate % women–men:  
+All persons active on the Belgian labour market (employees or not). All men and women are affected.
+Identify any differences in the respective situation of women and men within the subject matter of the draft regulation.  
+There are no differences.
+☐ Tick this box if differences exist.
+4. Health
+☐ Positive impact
+☐ Negative impact
+☒ No impact
+5. Employment
+☒ Positive impact
+☐ Negative impact
+☐ No impact
+Explain  
+Training of employees is essential for the proper functioning of the labour market.
+Based on this underlying objective, the Council of the European Union recommended that Member States develop individual learning accounts “as a means to enable individuals to participate in labour‑market‑relevant training and to provide a facilitating framework, including guidance and validation opportunities, to promote effective participation in such training.” These learning accounts therefore fit within the broader EU objective of “enabling more adults to participate in training, thereby increasing participation rates and reducing skills gaps,” with a view to “promoting a highly competitive social market economy aimed at full employment and social progress.”
+6. Consumption and production patterns
+☐ Positive impact
+☐ Negative impact
+☒ No impact
+7. Economic development
+☒ Positive impact
+☐ Negative impact
+☐ No impact
+Explain  
+Training of employees is essential for the proper functioning of the labour market.
+(Explanation identical to section 5.)
+8. Investments
+☐ Positive impact
+☐ Negative impact
+☒ No impact
+9. Research and development
+☐ Positive impact
+☐ Negative impact
+☒ No impact
+10. SMEs
+Which enterprises are directly or indirectly involved?  
+☒ Enterprises (including SMEs) are involved
+☐ Enterprises are not involved
+Describe sectors, number of enterprises, % SMEs:  
+All companies are targeted.
+Identify the positive and negative impact of the draft on SMEs.  
+A trained and informed employee is a better resource for the company.
+☐ There is a negative impact.
+11. Administrative burdens
+☒ Enterprises or citizens are involved
+☐ Enterprises or citizens are not involved
+1. Identify, per target group, the necessary formalities and obligations for applying the regulation.
+☒ Formalities/obligations exist in current regulation
+☒ Formalities/obligations exist in draft regulation
+2. Which documents and information must each target group provide?
+3. How are these documents and information collected?
+4. What is the periodicity of the formalities and obligations?
+5. What measures are taken to mitigate or compensate any negative impact?
+Easy access to a digital platform where a set of data is already encoded and available.
+12. Energy
+☐ Positive impact
+☐ Negative impact
+☒ No impact
+13. Mobility
+☐ Positive impact
+☐ Negative impact
+☒ No impact
+14. Food
+☐ Positive impact
+☐ Negative impact
+☒ No impact
+15. Climate change
+☐ Positive impact
+☐ Negative impact
+☒ No impact
+16. Natural resources
+☐ Positive impact
+☐ Negative impact
+☒ No impact
+17. Outdoor and indoor air
+☐ Positive impact
+☐ Negative impact
+☒ No impact
+18. Biodiversity
+☐ Positive impact
+☐ Negative impact
+☒ No impact
+19. Nuisance
+☐ Positive impact
+☐ Negative impact
+☒ No impact
+20. Government
+☐ Positive impact
+☐ Negative impact
+☒ No impact
+21. Policy coherence for development
+Identify any direct or indirect impact of the draft on developing countries in terms of: food security, health and access to medicines, decent work, local and international trade, income and mobilization of local resources (taxation), mobility of persons, environment and climate change (clean development mechanisms), peace and security.  
+☐ Impact on developing countries
+☒ No impact on developing countries
+Explain why:  
+None – This concerns an internal policy measure.

@@ -19,3 +19,14 @@ data/
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
+
+# OS files
+.DS_Store
+*.DS_Store
+
+# Temporary files
+*.tmp
+*.log
+
+# Large PDF files (optional - may want to exclude)
+# *.pdf
