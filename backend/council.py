@@ -1,37 +1,136 @@
-"""3-stage LLM Council orchestration with bootstrap evaluation contexts."""
+"""3-stage LLM Council orchestration with bootstrap evaluation contexts and direct API support."""
 
 import random
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 from collections import defaultdict
-from .openrouter import query_models_parallel, query_model
 from .config import (
     COUNCIL_MODELS, 
     CHAIRMAN_MODEL,
     ENABLE_BOOTSTRAP_EVALUATION,
     BOOTSTRAP_ITERATIONS,
     EVALUATION_CRITERIA,
-    BOOTSTRAP_AGGREGATION_METHOD
+    BOOTSTRAP_AGGREGATION_METHOD,
+    USE_DIRECT_APIS
 )
 
+# Import API clients - prefer direct APIs, fallback to OpenRouter
+if USE_DIRECT_APIS:
+    try:
+        from .direct_apis import query_models_parallel_direct as query_models_parallel, query_model_direct as query_model
+        print("✅ Using direct APIs (Anthropic, Google, xAI, OpenAI)")
+    except ImportError:
+        from .openrouter import query_models_parallel, query_model
+        print("⚠️  Direct APIs not available, using OpenRouter")
+else:
+    from .openrouter import query_models_parallel, query_model
+    print("⚠️  Using OpenRouter (direct API keys not found)")
 
-async def stage1_collect_responses(user_query: str) -> List[Dict[str, Any]]:
+
+async def stage1_collect_responses(
+    user_query: str,
+    context: Optional[str] = None,
+    specialized_roles: bool = True
+) -> List[Dict[str, Any]]:
     """
     Stage 1: Collect individual responses from all council models.
+    
+    For RIA generation, models are assigned specialized roles:
+    - Claude: Problem definition and policy analysis specialist
+    - Gemini: Evidence synthesis and data interpretation specialist
+    - Grok: Impact assessment and risk analysis specialist
 
     Args:
         user_query: The user's question
+        context: Optional retrieved context from vector store/knowledge graph
+        specialized_roles: Whether to use specialized role prompts for RIA
 
     Returns:
         List of dicts with 'model' and 'response' keys
     """
-    messages = [{"role": "user", "content": user_query}]
+    # Build context-aware query
+    if context and specialized_roles:
+        # Create specialized prompts for each model based on their strengths
+        specialized_queries = {}
+        
+        # Assign specialized roles based on model type
+        for i, model in enumerate(COUNCIL_MODELS):
+            if "google" in model or "gemini" in model:
+                # Gemini: Evidence synthesis specialist
+                specialized_queries[model] = f"""{user_query}
 
-    # Query all models in parallel
-    responses = await query_models_parallel(COUNCIL_MODELS, messages)
+You are an Evidence Synthesis and Data Interpretation Specialist. Focus on:
+- Synthesizing evidence from retrieved documents
+- Proper citation of EU and Belgian RIA examples
+- Data-driven impact assessments
 
+Retrieved Context:
+{context[:2000] if len(context) > 2000 else context}
+
+Generate assessments with strong evidence-based reasoning and proper citations."""
+            elif "x-ai" in model or "grok" in model:
+                # Grok: Impact assessment specialist
+                specialized_queries[model] = f"""{user_query}
+
+You are an Impact Assessment and Risk Analysis Specialist. Focus on:
+- Comprehensive 21 impact themes assessment
+- Risk identification and mitigation measures
+- Positive/negative/no impact determinations
+
+Retrieved Context:
+{context[:2000] if len(context) > 2000 else context}
+
+Generate detailed impact assessments for all 21 Belgian RIA themes."""
+            elif "openai" in model or "gpt" in model:
+                # OpenAI: Problem definition and general analysis specialist
+                specialized_queries[model] = f"""{user_query}
+
+You are a Problem Definition and Policy Analysis Specialist. Focus on:
+- Comprehensive problem definition and background
+- Policy context and regulatory gaps
+- Drawing insights from retrieved EU Impact Assessment documents
+
+Retrieved Context:
+{context[:2000] if len(context) > 2000 else context}
+
+Generate a detailed Background/Problem Definition section and overall assessment structure."""
+        
+        # Use specialized queries if available, otherwise use general query
+        queries = {}
+        for model in COUNCIL_MODELS:
+            if model in specialized_queries:
+                queries[model] = specialized_queries[model]
+            else:
+                queries[model] = f"""{user_query}
+
+Retrieved Context:
+{context[:2000] if len(context) > 2000 else context}"""
+    else:
+        # Standard query for all models
+        full_query = user_query
+        if context:
+            full_query = f"""{user_query}
+
+Retrieved Context:
+{context[:2000] if len(context) > 2000 else context}"""
+        queries = {model: full_query for model in COUNCIL_MODELS}
+    
+    # Query all models in parallel with their specialized queries
+    tasks = []
+    model_list = []
+    for model, query in queries.items():
+        messages = [{"role": "user", "content": query}]
+        tasks.append(query_model(model, messages))
+        model_list.append(model)
+    
+    import asyncio
+    responses_list = await asyncio.gather(*tasks, return_exceptions=True)
+    
     # Format results
     stage1_results = []
-    for model, response in responses.items():
+    for model, response in zip(model_list, responses_list):
+        if isinstance(response, Exception):
+            print(f"Error from {model}: {response}")
+            continue
         if response is not None:  # Only include successful responses
             stage1_results.append({
                 "model": model,
@@ -44,22 +143,35 @@ async def stage1_collect_responses(user_query: str) -> List[Dict[str, Any]]:
 def _generate_evaluation_prompt(
     user_query: str,
     responses_text: str,
-    criterion: Dict[str, str]
+    criterion: Dict[str, str],
+    context: Optional[str] = None
 ) -> str:
     """
     Generate an evaluation prompt based on a specific criterion.
+    For RIA assessments, includes context-aware evaluation.
     
     Args:
         user_query: The original user query
         responses_text: Formatted responses text
         criterion: Dictionary with 'name', 'focus', and 'description'
+        context: Optional retrieved context for evaluation
     
     Returns:
         Formatted evaluation prompt
     """
-    return f"""You are evaluating responses for {criterion['focus']}.
+    context_section = ""
+    if context:
+        context_section = f"""
 
-Question: {user_query}
+Retrieved Context (for reference):
+{context[:1500] if len(context) > 1500 else context}
+
+Evaluate how well each response uses this retrieved context."""
+    
+    return f"""You are evaluating Belgian RIA impact assessments for {criterion['focus']}.
+
+Original Query: {user_query}
+{context_section}
 
 Here are the responses from different models (anonymized):
 
@@ -68,7 +180,12 @@ Here are the responses from different models (anonymized):
 Your task:
 1. Evaluate each response based on {criterion['description']}.
 2. For each response, explain what it does well and what it does poorly, focusing on {criterion['focus']}.
-3. Then, at the very end of your response, provide a final ranking.
+3. Pay special attention to:
+   - Adherence to Belgian RIA structure (21 impact themes)
+   - Quality of EU-style detailed analysis
+   - Proper use of retrieved context and citations
+   - Completeness of Background/Problem Definition section
+4. Then, at the very end of your response, provide a final ranking.
 
 IMPORTANT: Your final ranking MUST be formatted EXACTLY as follows:
 - Start with the line "FINAL RANKING:" (all caps, with colon)
@@ -194,7 +311,8 @@ def _aggregate_bootstrap_rankings_consensus_score(
 
 async def stage2_collect_rankings(
     user_query: str,
-    stage1_results: List[Dict[str, Any]]
+    stage1_results: List[Dict[str, Any]],
+    context: Optional[str] = None
 ) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
     """
     Stage 2: Each model ranks the anonymized responses using bootstrap evaluation contexts.
@@ -298,8 +416,8 @@ Now provide your evaluation and ranking:"""
             for label, result in zip(shuffled_labels, shuffled_results)
         ])
         
-        # Generate evaluation prompt with specific criterion
-        ranking_prompt = _generate_evaluation_prompt(user_query, responses_text, criterion)
+        # Generate evaluation prompt with specific criterion and context
+        ranking_prompt = _generate_evaluation_prompt(user_query, responses_text, criterion, context)
         
         messages = [{"role": "user", "content": ranking_prompt}]
         
@@ -409,15 +527,18 @@ Now provide your evaluation and ranking:"""
 async def stage3_synthesize_final(
     user_query: str,
     stage1_results: List[Dict[str, Any]],
-    stage2_results: List[Dict[str, Any]]
+    stage2_results: List[Dict[str, Any]],
+    context: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Stage 3: Chairman synthesizes final response.
+    For RIA assessments, ensures comprehensive synthesis with context awareness.
 
     Args:
         user_query: The original user query
         stage1_results: Individual model responses from Stage 1
         stage2_results: Rankings from Stage 2
+        context: Optional retrieved context from vector store/knowledge graph
 
     Returns:
         Dict with 'model' and 'response' keys
@@ -432,23 +553,46 @@ async def stage3_synthesize_final(
         f"Model: {result['model']}\nRanking: {result['ranking']}"
         for result in stage2_results
     ])
+    
+    context_section = ""
+    if context:
+        context_section = f"""
 
-    chairman_prompt = f"""You are the Chairman of an LLM Council. Multiple AI models have provided responses to a user's question, and then ranked each other's responses.
+RETRIEVED CONTEXT (from EU and Belgian RIA documents):
+{context[:3000] if len(context) > 3000 else context}
 
-Original Question: {user_query}
+Use this context to ensure your synthesis:
+- References specific documents where appropriate (e.g., SWD(2022) 167 final)
+- Uses similar analysis patterns from retrieved EU documents
+- Maintains consistency with Belgian RIA structure"""
 
-STAGE 1 - Individual Responses:
+    chairman_prompt = f"""You are the Meta-Chairman of an LLM Council for Belgian Regulatory Impact Assessment generation. Multiple AI models have provided specialized responses, and then ranked each other's responses.
+
+Original Query: {user_query}
+{context_section}
+
+STAGE 1 - Individual Responses (from specialized models):
 {stage1_text}
 
 STAGE 2 - Peer Rankings:
 {stage2_text}
 
-Your task as Chairman is to synthesize all of this information into a single, comprehensive, accurate answer to the user's original question. Consider:
-- The individual responses and their insights
+Your task as Meta-Chairman is to synthesize all of this information into a single, comprehensive Belgian RIA assessment. 
+
+CRITICAL REQUIREMENTS:
+1. Structure: Background/Problem Definition (FIRST), Executive Summary, Proposal Overview, 21 Impact Themes Assessment, Overall Assessment Summary, Recommendations
+2. Use retrieved context: Reference specific EU documents (SWD, COM references) and Belgian RIA examples where relevant
+3. Citations: Include citations when referencing analysis patterns or methodologies from retrieved documents
+4. Completeness: Ensure all 21 impact themes are assessed with clear positive/negative/no impact determinations
+5. Quality: Use EU-style detailed, evidence-based analysis while maintaining Belgian RIA form structure
+
+Consider:
+- The specialized insights from each model (problem definition, evidence synthesis, impact assessment)
 - The peer rankings and what they reveal about response quality
 - Any patterns of agreement or disagreement
+- How to best combine the strengths of each response
 
-Provide a clear, well-reasoned final answer that represents the council's collective wisdom:"""
+Provide a clear, well-reasoned, comprehensive Belgian RIA that represents the council's collective wisdom:"""
 
     messages = [{"role": "user", "content": chairman_prompt}]
 
@@ -587,18 +731,26 @@ Title:"""
     return title
 
 
-async def run_full_council(user_query: str) -> Tuple[List, List, Dict, Dict]:
+async def run_full_council(
+    user_query: str,
+    context: Optional[str] = None
+) -> Tuple[List, List, Dict, Dict]:
     """
     Run the complete 3-stage council process.
 
     Args:
         user_query: The user's question
+        context: Optional retrieved context from vector store/knowledge graph
 
     Returns:
         Tuple of (stage1_results, stage2_results, stage3_result, metadata)
     """
-    # Stage 1: Collect individual responses
-    stage1_results = await stage1_collect_responses(user_query)
+    # Stage 1: Collect individual responses with specialized roles
+    stage1_results = await stage1_collect_responses(
+        user_query,
+        context=context,
+        specialized_roles=True
+    )
 
     # If no models responded successfully, return error
     if not stage1_results:
@@ -607,17 +759,22 @@ async def run_full_council(user_query: str) -> Tuple[List, List, Dict, Dict]:
             "response": "All models failed to respond. Please try again."
         }, {}
 
-    # Stage 2: Collect rankings
-    stage2_results, label_to_model = await stage2_collect_rankings(user_query, stage1_results)
+    # Stage 2: Collect rankings with context-aware evaluation
+    stage2_results, label_to_model = await stage2_collect_rankings(
+        user_query,
+        stage1_results,
+        context=context
+    )
 
     # Calculate aggregate rankings
     aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
 
-    # Stage 3: Synthesize final answer
+    # Stage 3: Synthesize final answer with context
     stage3_result = await stage3_synthesize_final(
         user_query,
         stage1_results,
-        stage2_results
+        stage2_results,
+        context=context
     )
 
     # Prepare metadata

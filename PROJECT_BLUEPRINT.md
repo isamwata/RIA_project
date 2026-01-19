@@ -508,6 +508,59 @@ Build an orchestrated system that:
 
 **Recommendation**: S3 for production, local for development
 
+### Document Processing
+
+#### Option A: Google Cloud Document AI (Recommended for Production)
+
+**Advantages**:
+- Superior OCR accuracy (Google's ML models)
+- Structured data extraction (tables, forms, key-value pairs)
+- Layout understanding (sections, headers, paragraphs)
+- Custom processor training for RIA-specific documents
+- Entity extraction (proposal metadata, impact categories)
+- Batch processing capabilities
+
+**Use Cases**:
+- Complex PDFs with tables and forms
+- Scanned documents
+- RIA template forms
+- Historical RIA document processing
+- EU Impact Assessment documents
+
+**Cost**: ~$1.50 per 1,000 pages (OCR/Form Parser)
+
+**Implementation**: See `DOCUMENT_AI_INTEGRATION.md` for detailed integration guide
+
+#### Option B: PyMuPDF + Tesseract OCR (Current/Fallback)
+
+**Advantages**:
+- Open-source, no cloud dependency
+- Good for simple text-based PDFs
+- No per-page costs
+- Works offline
+
+**Limitations**:
+- Lower OCR accuracy for complex documents
+- Limited structured data extraction
+- Manual handling of tables and forms
+
+**Use Cases**:
+- Simple text-based PDFs
+- Development/testing
+- Fallback when Document AI unavailable
+- Cost-sensitive scenarios
+
+**Recommendation**: 
+- Use Document AI as primary for production
+- Keep PyMuPDF/Tesseract as fallback
+- Hybrid approach: Document AI for complex docs, PyMuPDF for simple ones
+
+**Libraries**:
+- `pymupdf` (fitz) - PDF text extraction
+- `pytesseract` - OCR for images
+- `google-cloud-documentai` - Document AI integration
+- `Pillow` - Image processing
+
 ### Monitoring & Logging
 
 **Logging**:

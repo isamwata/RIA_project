@@ -1,20 +1,36 @@
 """Configuration for the LLM Council."""
 
 import os
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except (ImportError, PermissionError, FileNotFoundError):
+    # If .env file doesn't exist or can't be loaded, continue with environment variables
+    pass
 
-load_dotenv()
-
-# OpenRouter API key
+# OpenRouter API key (optional - for fallback)
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
-# Council members - list of OpenRouter model identifiers
+# Direct API keys (preferred)
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+XAI_API_KEY = os.getenv("XAI_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+# Use direct APIs if available, otherwise fallback to OpenRouter
+USE_DIRECT_APIS = bool(ANTHROPIC_API_KEY or GOOGLE_API_KEY or XAI_API_KEY or OPENAI_API_KEY)
+
+# Council members - list of model identifiers
 # These models participate in Stage 1 (first-opinion generation) and Stage 2 (peer review)
+# If using direct APIs, these will be called directly; otherwise via OpenRouter
 COUNCIL_MODELS = [
-    "openai/gpt-5.1",
-    "google/gemini-3-pro-preview",
-    "x-ai/grok-4",
-    # Note: Claude Sonnet 4.5 moved to Meta-Chairman role (see below)
+    "google/gemini-2.0-flash-exp",  # Evidence synthesis specialist
+    "x-ai/grok-2-1212",  # Impact assessment specialist
+    "openai/gpt-4",  # General analysis specialist (using OpenAI directly)
+    # Fallback models if direct APIs not available:
+    # "openai/gpt-5.1",
+    # "google/gemini-3-pro-preview",
+    # "x-ai/grok-4",
 ]
 
 # Meta-Chairman model - synthesizes final response
@@ -23,11 +39,10 @@ COUNCIL_MODELS = [
 # It only sees the complete deliberation record and produces the final synthesis
 # 
 # Recommended Meta-Chairman models (prioritize judgment and synthesis):
-# - "anthropic/claude-sonnet-4.5" - Excellent at synthesis, conflict resolution, balanced judgment
+# - "anthropic/claude-sonnet-4-20250514" - Excellent at synthesis, conflict resolution, balanced judgment
 # - "anthropic/claude-opus-4" - Strong reasoning and synthesis capabilities
 # - "openai/gpt-4o" - Good at balanced analysis and synthesis
-# - "google/gemini-2.0-flash-exp" - Fast and capable synthesis
-CHAIRMAN_MODEL = "anthropic/claude-sonnet-4.5"
+CHAIRMAN_MODEL = "anthropic/claude-sonnet-4-20250514"
 
 # Validation: Ensure Meta-Chairman is not in the council
 if CHAIRMAN_MODEL in COUNCIL_MODELS:
@@ -56,32 +71,32 @@ BOOTSTRAP_ITERATIONS = 5
 ENABLE_BOOTSTRAP_EVALUATION = True
 
 # Evaluation criteria variations for bootstrap
-# Each criterion focuses on a different aspect of response quality
+# RIA-specific criteria for evaluating impact assessments
 EVALUATION_CRITERIA = [
     {
-        "name": "accuracy",
-        "focus": "technical accuracy and correctness",
-        "description": "Rank based on factual correctness, technical accuracy, and absence of errors"
+        "name": "ria_structure",
+        "focus": "Belgian RIA structure compliance",
+        "description": "Rank based on adherence to Belgian RIA structure (21 themes), proper section organization, and format compliance"
+    },
+    {
+        "name": "analysis_depth",
+        "focus": "EU-style analysis depth",
+        "description": "Rank based on evidence-based reasoning, comprehensive analysis, domain-specific insights, and analytical rigor"
+    },
+    {
+        "name": "context_usage",
+        "focus": "retrieved context utilization",
+        "description": "Rank based on effective use of retrieved EU and Belgian RIA documents, proper citations, and reference to analysis patterns"
     },
     {
         "name": "completeness",
-        "focus": "completeness and comprehensiveness",
-        "description": "Rank based on coverage of all relevant aspects, depth of explanation, and comprehensiveness"
-    },
-    {
-        "name": "clarity",
-        "focus": "clarity and accessibility",
-        "description": "Rank based on clarity of explanation, ease of understanding, and effective communication"
-    },
-    {
-        "name": "utility",
-        "focus": "practical usefulness",
-        "description": "Rank based on actionable insights, practical applicability, and real-world usefulness"
+        "focus": "completeness of assessment",
+        "description": "Rank based on coverage of all 21 impact themes, comprehensive Background/Problem Definition, and thorough impact assessments"
     },
     {
         "name": "balanced",
-        "focus": "overall quality",
-        "description": "Rank holistically considering all factors: accuracy, completeness, clarity, and utility"
+        "focus": "overall RIA quality",
+        "description": "Rank holistically considering structure, analysis depth, context usage, and completeness for Belgian RIA standards"
     }
 ]
 
