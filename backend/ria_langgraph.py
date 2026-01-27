@@ -27,7 +27,7 @@ except ImportError:
     print("⚠️  LangGraph not installed. Install with: pip install langgraph")
 
 from .vector_store import VectorStore
-from .knowledge_graph import KnowledgeGraphBuilder
+from .knowledge_graph_neo4j import KnowledgeGraphBuilder
 from .council import (
     stage1_collect_responses,
     stage2_collect_rankings,
@@ -92,7 +92,7 @@ class RIAWorkflow:
     # Belgian RIA 21 Impact Themes with keywords (from Belgian RIA form)
     BELGIAN_IMPACT_THEMES = {
         1: {
-            "name": "Lutte contre la pauvreté / Combating poverty",
+            "name": "Lutte contre la pauvreté / Fight against poverty",
             "keywords": "Revenu minimum conforme à la dignité humaine, accès à des services de qualité, surendettement, risque de pauvreté ou d'exclusion sociale (y compris chez les mineurs), illettrisme, fracture numérique"
         },
         2: {
@@ -128,7 +128,7 @@ class RIAWorkflow:
             "keywords": "Opportunités de recherche et développement, innovation par l'introduction et la diffusion de nouveaux modes de production, de nouvelles pratiques d'entreprises ou de nouveaux produits et services, dépenses de recherche et de développement"
         },
         10: {
-            "name": "PME / SMEs",
+            "name": "PME / SMEs (Small and Medium-Sized Enterprises)",
             "keywords": "Impact sur le développement des PME"
         },
         11: {
@@ -156,7 +156,7 @@ class RIAWorkflow:
             "keywords": "Gestion efficiente des ressources, recyclage, réutilisation, qualité et consommation de l'eau (eaux de surface et souterraines, mers et océans), qualité et utilisation du sol (pollution, teneur en matières organiques, érosion, assèchement, inondations, densification, fragmentation), déforestation"
         },
         17: {
-            "name": "Air intérieur et extérieur / Outdoor and indoor air",
+            "name": "Air intérieur et extérieur / Indoor and outdoor air",
             "keywords": "Qualité de l'air (y compris l'air intérieur), émissions de polluants (agents chimiques ou biologiques méthane, hydrocarbures, solvants, SOX, NOx, NH3), particules fines"
         },
         18: {
@@ -164,11 +164,11 @@ class RIAWorkflow:
             "keywords": "Niveaux de la diversité biologique, état des écosystèmes (restauration, conservation, valorisation, zones protégées), altération et fragmentation des habitats, biotechnologies, brevets d'invention sur la matière biologique, utilisation des ressources génétiques, services rendus par les écosystèmes (purification de l'eau et de l'air, ...), espèces domestiquées ou cultivées, espèces exotiques envahissantes, espèces menacées"
         },
         19: {
-            "name": "Nuisances / Nuisance",
+            "name": "Nuisances / Nuisances",
             "keywords": "Nuisances sonores, visuelles ou olfactives, vibrations, rayonnements ionisants, non ionisants et électromagnétiques, nuisances lumineuses"
         },
         20: {
-            "name": "Autorités publiques / Government",
+            "name": "Autorités publiques / Public authorities",
             "keywords": "Fonctionnement démocratique des organes de concertation et consultation, services publics aux usagers, plaintes, recours, contestations, mesures d'exécution, investissements publics"
         },
         21: {
@@ -179,7 +179,7 @@ class RIAWorkflow:
     
     # EU domain to Belgian category mapping (for context retrieval)
     EU_DOMAIN_TO_BELGIAN_CATEGORY = {
-        "Environment": [15, 16, 17, 18, 19],  # Climate, Natural resources, Air, Biodiversity, Nuisance
+        "Environment": [15, 16, 17, 18, 19],  # Climate, Natural resources, Air, Biodiversity, Nuisances
         "Health": [4],  # Health
         "Digital": [2, 3, 5],  # Social cohesion, Equality, Employment
         "Competition": [6, 7, 10],  # Consumption, Economic development, SMEs
@@ -189,7 +189,7 @@ class RIAWorkflow:
         "Agriculture": [14, 16, 18],  # Food, Natural resources, Biodiversity
         "Social": [1, 2, 3, 4],  # Poverty, Social cohesion, Equality, Health
         "Economic": [5, 6, 7, 8, 9, 10],  # Employment, Consumption, Economic dev, Investments, R&D, SMEs
-        "Administrative": [11, 20],  # Administrative burdens, Government
+        "Administrative": [11, 20],  # Administrative burdens, Public authorities
         "International": [21]  # Policy coherence for development
     }
     
@@ -208,7 +208,7 @@ class RIAWorkflow:
     def __init__(
         self,
         vector_store_path: str = "vector_store",
-        knowledge_graph_path: str = "knowledge_graph.pkl"
+        knowledge_graph_path: Optional[str] = None  # Not used with Neo4j, kept for compatibility
     ):
         """Initialize workflow with vector store and knowledge graph."""
         if not LANGGRAPH_AVAILABLE:
@@ -224,15 +224,15 @@ class RIAWorkflow:
             except Exception as e:
                 print(f"⚠️  Could not load vector store: {e}")
         
-        # Load knowledge graph
+        # Load knowledge graph from Neo4j/AuraDB
         self.knowledge_graph = None
-        if Path(knowledge_graph_path).exists():
-            try:
-                builder = KnowledgeGraphBuilder()
-                self.knowledge_graph = builder.load_graph(knowledge_graph_path)
-                print(f"✅ Knowledge graph loaded from: {knowledge_graph_path}")
-            except Exception as e:
-                print(f"⚠️  Could not load knowledge graph: {e}")
+        try:
+            builder = KnowledgeGraphBuilder()
+            self.knowledge_graph = builder.load_graph()
+            print(f"✅ Knowledge graph connected to Neo4j/AuraDB")
+        except Exception as e:
+            print(f"⚠️  Could not connect to Neo4j knowledge graph: {e}")
+            print(f"   Make sure NEO4J_URI, NEO4J_USERNAME, and NEO4J_PASSWORD are set")
         
         # Build graph
         self.graph = self._build_graph()
@@ -243,6 +243,7 @@ class RIAWorkflow:
         
         # Add nodes
         workflow.add_node("ingest_proposal", self.ingest_proposal)
+        workflow.add_node("validate_proposal_llm", self.validate_proposal_llm)
         workflow.add_node("extract_features", self.extract_features)
         workflow.add_node("route_retrieval", self.route_retrieval_strategy)
         workflow.add_node("retrieve_vector", self.retrieve_from_vector_store)
@@ -256,7 +257,7 @@ class RIAWorkflow:
         workflow.add_node("council_stage2", self.council_stage2_rankings)
         workflow.add_node("council_stage3", self.council_stage3_synthesize)
         workflow.add_node("validate_council", self.validate_council_output)
-        workflow.add_node("refine_council", self.refine_council_output)
+        # refine_council node removed - validation doesn't block progress
         workflow.add_node("extract_sections", self.extract_ria_sections)
         workflow.add_node("structure_assessment", self.structure_assessment)
         workflow.add_node("calculate_quality", self.calculate_quality_metrics)
@@ -271,8 +272,31 @@ class RIAWorkflow:
         # Set entry point
         workflow.set_entry_point("ingest_proposal")
         
-        # Add edges
-        workflow.add_edge("ingest_proposal", "extract_features")
+        # Conditional routing from proposal ingestion - validate first
+        workflow.add_conditional_edges(
+            "ingest_proposal",
+            self.proposal_validation_decision,
+            {
+                "valid": "validate_proposal_llm",  # Pass to LLM validation for ambiguous cases
+                "invalid": "validation_error"
+            }
+        )
+        
+        # LLM validation for ambiguous cases
+        workflow.add_conditional_edges(
+            "validate_proposal_llm",
+            self.llm_validation_decision,
+            {
+                "valid": "extract_features",
+                "invalid": "validation_error"
+            }
+        )
+        
+        # Validation error node - returns error message
+        workflow.add_node("validation_error", self.handle_validation_error)
+        
+        # Error path goes to END
+        workflow.add_edge("validation_error", END)
         workflow.add_edge("extract_features", "route_retrieval")
         
         # Conditional routing from route_retrieval
@@ -309,49 +333,22 @@ class RIAWorkflow:
         # After synthesis, go directly to council (no validation loop)
         workflow.add_edge("synthesize_context", "council_stage1")
         
-        # Council stages (sequential) - validate after stage 3
+        # Council stages (sequential) - go directly to extraction (validation happens but doesn't block)
         workflow.add_edge("council_stage1", "council_stage2")
         workflow.add_edge("council_stage2", "council_stage3")
         workflow.add_edge("council_stage3", "validate_council")
         
-        # Conditional routing from validation - refine if needed, otherwise proceed
-        workflow.add_conditional_edges(
-            "validate_council",
-            self.council_validation_decision,
-            {
-                "proceed": "extract_sections",
-                "refine": "refine_council"
-            }
-        )
-        
-        # Refinement loops back to council_stage3 (with retry limit)
-        workflow.add_edge("refine_council", "council_stage3")
+        # Always proceed after validation (no refinement loop to prevent recursion issues)
+        # Validation still runs to track quality metrics, but doesn't block progress
+        workflow.add_edge("validate_council", "extract_sections")
         
         # Structure assessment
         workflow.add_edge("extract_sections", "structure_assessment")
         workflow.add_edge("structure_assessment", "calculate_quality")
         workflow.add_edge("calculate_quality", "route_review")
         
-        # Conditional routing for human review
-        workflow.add_conditional_edges(
-            "route_review",
-            self.review_decision,
-            {
-                "review": "human_review",
-                "approve": "generate_report"
-            }
-        )
-        
-        # Human review conditional routing - simplified to avoid loops
-        workflow.add_conditional_edges(
-            "human_review",
-            self.human_review_decision,
-            {
-                "approved": "generate_report",
-                "rejected": END,
-                "revision": "extract_sections"  # Don't loop back to council, just proceed
-            }
-        )
+        # Always proceed to report generation (human review handled by frontend)
+        workflow.add_edge("route_review", "generate_report")
         
         # After report generation
         workflow.add_edge("generate_report", "prepare_kb_update")
@@ -365,18 +362,146 @@ class RIAWorkflow:
     # Node Functions
     # ========================================================================
     
+    def validate_proposal_input(self, proposal: str) -> tuple[bool, str]:
+        """
+        Validate if input is a regulatory proposal.
+        Returns: (is_valid, error_message)
+        """
+        if not proposal or not proposal.strip():
+            return False, "No proposal provided. Please enter a regulatory proposal."
+        
+        proposal = proposal.strip()
+        proposal_lower = proposal.lower()
+        word_count = len(proposal.split())
+        
+        # Phase 1: Quick rule-based checks
+        
+        # Check 1: Too short
+        if word_count < 30:
+            return False, f"Proposal is too short ({word_count} words). A regulatory proposal should be at least 50 words describing a regulation, decree, or policy framework."
+        
+        # Check 2: Starts with question words
+        question_starters = ["what", "how", "can", "could", "would", "should", "why", "when", "where", "who", "is", "are", "do", "does", "did"]
+        first_words = proposal_lower.split()[:3]
+        if any(word in question_starters for word in first_words):
+            return False, "This appears to be a question, not a regulatory proposal. Please provide the actual proposal text describing a regulation, decree, or policy framework."
+        
+        # Check 3: Contains greetings or casual language
+        casual_phrases = ["hello", "hi", "hey", "thanks", "thank you", "please help", "can you help", "tell me", "explain", "what is your name"]
+        if any(phrase in proposal_lower for phrase in casual_phrases):
+            return False, "This appears to be a casual conversation, not a regulatory proposal. Please provide a regulatory proposal text."
+        
+        # Check 4: Must contain regulatory keywords
+        regulatory_keywords = [
+            "regulation", "regulatory", "decree", "directive", "framework", "policy", "policies",
+            "law", "legislation", "legislative", "requirement", "requirements", "obligation", "obligations",
+            "compliance", "governance", "standard", "standards", "rule", "rules", "provision", "provisions",
+            "establish", "establishing", "implement", "implementation", "enforce", "enforcement"
+        ]
+        has_regulatory_keyword = any(keyword in proposal_lower for keyword in regulatory_keywords)
+        
+        if not has_regulatory_keyword and word_count < 100:
+            # If no regulatory keywords and still short, likely not a proposal
+            return False, "This does not appear to be a regulatory proposal. Please provide text describing a regulation, decree, directive, or policy framework."
+        
+        # Phase 2: LLM classification for ambiguous cases
+        # If it passes Phase 1 but we're not 100% sure, use LLM
+        
+        # If it has regulatory keywords and is long enough, likely valid
+        if has_regulatory_keyword and word_count >= 50:
+            return True, ""
+        
+        # For ambiguous cases (has keywords but short, or long but no keywords), use LLM
+        # This will be done in the workflow if needed
+        
+        return True, ""  # Pass Phase 1, proceed to workflow
+    
+    async def classify_proposal_with_llm(self, proposal: str) -> tuple[bool, str]:
+        """
+        Use LLM to classify if input is a regulatory proposal.
+        Returns: (is_valid, error_message)
+        """
+        try:
+            from openai import OpenAI
+            import os
+            
+            api_key = os.getenv("OPENAI_API_KEY")
+            if not api_key:
+                # If no OpenAI key, default to allowing (will be caught by workflow if truly invalid)
+                return True, ""
+            
+            client = OpenAI(api_key=api_key)
+            
+            classification_prompt = f"""You are a validator for regulatory proposals. Determine if the following input is a regulatory proposal suitable for a Belgian Regulatory Impact Assessment (RIA).
+
+A valid regulatory proposal should:
+- Describe a regulation, decree, directive, or policy framework
+- Mention regulatory requirements, obligations, or frameworks
+- Reference a policy domain (health, environment, digital, finance, employment, etc.)
+- Be action-oriented (describes what will be regulated, not asking questions)
+- Be at least 50 words describing the regulatory measure
+
+Input to validate:
+"{proposal}"
+
+Respond with ONLY one of these:
+- "VALID" if it's a regulatory proposal
+- "INVALID: [brief reason]" if it's not a regulatory proposal (provide one sentence reason)
+
+Your response:"""
+            
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",  # Use cheaper model for classification
+                messages=[
+                    {"role": "system", "content": "You are a validator for regulatory proposals. Respond only with VALID or INVALID: [reason]."},
+                    {"role": "user", "content": classification_prompt}
+                ],
+                temperature=0.1,
+                max_tokens=100
+            )
+            
+            result = response.choices[0].message.content.strip()
+            
+            if result.upper().startswith("VALID"):
+                return True, ""
+            elif result.upper().startswith("INVALID"):
+                reason = result.split(":", 1)[1].strip() if ":" in result else "This does not appear to be a regulatory proposal."
+                return False, reason
+            else:
+                # Ambiguous response, default to allowing (workflow will catch if truly invalid)
+                return True, ""
+                
+        except Exception as e:
+            print(f"⚠️  LLM classification error: {str(e)[:100]}")
+            # On error, default to allowing (workflow will catch if truly invalid)
+            return True, ""
+    
     def ingest_proposal(self, state: RIAState) -> RIAState:
         """Ingest and validate proposal input."""
         print(f"\n📥 Ingesting proposal...")
         
         proposal = state.get("proposal", "")
-        if not proposal:
-            return self._add_error(state, "No proposal provided")
+        
+        # Phase 1: Quick rule-based validation
+        is_valid, error_message = self.validate_proposal_input(proposal)
+        
+        if not is_valid:
+            print(f"❌ Proposal validation failed: {error_message}")
+            return {
+                **state,
+                "validation_error": error_message,
+                "is_valid_proposal": False
+            }
+        
+        # Phase 2: LLM classification will be done in a separate async node if needed
+        # For now, if Phase 1 passes, we proceed (LLM check can be added as separate node if needed)
         
         # Initialize state
         new_state = {
             **state,
             "context": state.get("context", {}),
+            "is_valid_proposal": True,
+            "validation_error": None,
             "errors": [],
             "retry_count": 0,
             "quality_metrics": {}
@@ -384,6 +509,93 @@ class RIAWorkflow:
         
         print(f"✅ Proposal ingested: {proposal[:100]}...")
         return new_state
+    
+    def proposal_validation_decision(self, state: RIAState) -> str:
+        """Decision function for proposal validation (Phase 1 - rule-based)."""
+        is_valid = state.get("is_valid_proposal", True)
+        validation_error = state.get("validation_error")
+        
+        if not is_valid or validation_error:
+            return "invalid"
+        return "valid"
+    
+    async def validate_proposal_llm(self, state: RIAState) -> RIAState:
+        """Phase 2: LLM classification for ambiguous cases."""
+        proposal = state.get("proposal", "")
+        
+        # Check if we need LLM validation (ambiguous cases)
+        proposal_lower = proposal.lower()
+        word_count = len(proposal.split())
+        regulatory_keywords = ["regulation", "regulatory", "decree", "directive", "framework", "policy", "requirement", "obligation", "compliance", "governance"]
+        has_keywords = any(kw in proposal_lower for kw in regulatory_keywords)
+        
+        # Use LLM if: long but no keywords, or medium length (ambiguous)
+        needs_llm_check = (word_count >= 50 and not has_keywords) or (word_count >= 50 and word_count < 100)
+        
+        if needs_llm_check:
+            print(f"🔍 Running LLM classification (ambiguous case: {word_count} words, keywords: {has_keywords})...")
+            is_valid, error_message = await self.classify_proposal_with_llm(proposal)
+            
+            if not is_valid:
+                print(f"❌ LLM validation failed: {error_message}")
+                return {
+                    **state,
+                    "validation_error": error_message,
+                    "is_valid_proposal": False
+                }
+            else:
+                print(f"✅ LLM validation passed")
+        else:
+            # Clear pass - has keywords and sufficient length
+            print(f"✅ Clear regulatory proposal (no LLM check needed)")
+        
+        return {
+            **state,
+            "is_valid_proposal": True,
+            "validation_error": None
+        }
+    
+    def llm_validation_decision(self, state: RIAState) -> str:
+        """Decision function after LLM validation."""
+        is_valid = state.get("is_valid_proposal", True)
+        validation_error = state.get("validation_error")
+        
+        if not is_valid or validation_error:
+            return "invalid"
+        return "valid"
+    
+    def handle_validation_error(self, state: RIAState) -> RIAState:
+        """Handle validation error and prepare error message."""
+        error_message = state.get("validation_error", "Invalid proposal input.")
+        proposal = state.get("proposal", "")
+        
+        # Create helpful error response with examples
+        examples = [
+            "Belgian Royal Decree on Artificial Intelligence Governance: Establishing a national framework for trustworthy AI systems in Belgium, including requirements for high-risk AI applications in public services, transparency obligations for AI systems used by federal and regional authorities, and governance mechanisms for AI development and deployment in the Belgian market.",
+            "Regulation on Environmental Standards: Establishing mandatory environmental protection requirements for industrial facilities, including emissions limits, waste management obligations, and monitoring and reporting frameworks for compliance verification.",
+            "Framework for Digital Services: Creating a comprehensive regulatory framework for digital service providers operating in Belgium, including data protection requirements, consumer rights protections, and transparency obligations for algorithmic decision-making systems."
+        ]
+        
+        error_response = {
+            "error": True,
+            "error_type": "invalid_proposal",
+            "message": error_message,
+            "input_received": proposal[:200] + "..." if len(proposal) > 200 else proposal,
+            "examples": examples,
+            "guidance": "A valid regulatory proposal should:\n- Describe a regulation, decree, directive, or policy framework\n- Mention regulatory requirements, obligations, or frameworks\n- Reference a policy domain (health, environment, digital, finance, etc.)\n- Be at least 50 words describing the regulatory measure\n- Be action-oriented (describes what will be regulated)"
+        }
+        
+        print(f"❌ Validation error: {error_message}")
+        
+        return {
+            **state,
+            "validation_error": error_message,
+            "error_response": error_response,
+            "final_report": {
+                "error": True,
+                "error_response": error_response
+            }
+        }
     
     def extract_features(self, state: RIAState) -> RIAState:
         """Extract features from proposal for routing decisions."""
@@ -543,22 +755,18 @@ class RIAWorkflow:
                     if any(kw in proposal for kw in keywords):
                         categories.append(category)
             
-            # Find chunks in matching categories
+            # Find chunks in matching categories using Neo4j
             chunks = []
             for category in categories[:3]:  # Limit to 3 categories
-                category_node = f"category:{category}"
-                if category_node in self.knowledge_graph:
-                    # Get chunks connected to this category
-                    for chunk_node in self.knowledge_graph.successors(category_node):
-                        if self.knowledge_graph.nodes[chunk_node].get("node_type") == "chunk":
-                            chunk_data = self.knowledge_graph.nodes[chunk_node]
-                            chunks.append({
-                                "chunk_id": chunk_data.get("chunk_id", ""),
-                                "content": chunk_data.get("content", ""),
-                                "metadata": chunk_data.get("metadata", {}),
-                                "score": 0.8,  # Graph-based relevance score
-                                "source": "knowledge_graph"
-                            })
+                category_chunks = self.knowledge_graph.get_chunks_by_category_with_data(category)
+                for chunk_data in category_chunks:
+                    chunks.append({
+                        "chunk_id": chunk_data.get("chunk_id", ""),
+                        "content": chunk_data.get("content", ""),
+                        "metadata": chunk_data.get("metadata", {}),
+                        "score": 0.8,  # Graph-based relevance score
+                        "source": "knowledge_graph"
+                    })
             
             # Limit results
             chunks = chunks[:top_k]
@@ -971,6 +1179,8 @@ For each theme, provide: [POSITIVE IMPACT] / [NEGATIVE IMPACT] / [NO IMPACT] wit
             return {**state, "stage2_results": []}
         
         try:
+            synthesized = state.get("synthesized_context", "")
+            
             enhanced_query = f"""Evaluate the following Belgian RIA assessments for the regulatory proposal:
 
 {proposal}
@@ -1123,6 +1333,27 @@ REQUIRED STRUCTURE:
 Generate Belgian RIA structure with all 21 themes, using EU-style detailed analysis with citations:
 {themes_list}
 
+CRITICAL FORMAT REQUIREMENT FOR 21 IMPACT THEMES:
+You MUST format each theme assessment EXACTLY as follows (this format is required for parsing):
+
+[1] Fight against poverty
+Keywords: [list keywords]
+Assessment: [POSITIVE IMPACT] / [NEGATIVE IMPACT] / [NO IMPACT]
+[Your detailed explanation here - at least 100 words with evidence, analysis, and citations]
+
+[2] Equal opportunities and social cohesion
+Keywords: [list keywords]
+Assessment: [POSITIVE IMPACT] / [NEGATIVE IMPACT] / [NO IMPACT]
+[Your detailed explanation here]
+
+... continue for ALL 21 themes numbered [1] through [21]
+
+IMPORTANT: 
+- Each theme MUST start with [N] where N is 1-21
+- Each theme MUST include "Assessment:" followed by [POSITIVE IMPACT] / [NEGATIVE IMPACT] / [NO IMPACT]
+- Each theme MUST have a detailed explanation (minimum 100 words)
+- DO NOT skip any themes - assess all 21 even if impact is minimal
+
 Ensure you provide detailed assessments for ALL 21 themes with clear positive/negative/no impact determinations and include citations when referencing analysis patterns or methodologies from retrieved documents."""
             
             return await self._openai_fallback(state, enhanced_query)
@@ -1252,15 +1483,20 @@ Ensure you provide detailed assessments for ALL 21 themes with clear positive/ne
         
         # Check retry count to avoid infinite loops
         retry_count = state.get("council_refinement_count", 0)
-        max_refinements = 2
+        max_refinements = 1  # Reduced to 1 to prevent excessive loops
         
-        if is_valid or retry_count >= max_refinements:
-            if retry_count >= max_refinements and not is_valid:
-                print(f"⚠️  Max refinements reached ({max_refinements}), proceeding with current output")
+        # Always proceed if valid or max refinements reached
+        if is_valid:
+            print(f"✅ Validation passed, proceeding")
             return "proceed"
-        else:
-            print(f"🔄 Requesting refinement (attempt {retry_count + 1}/{max_refinements})")
-            return "refine"
+        
+        if retry_count >= max_refinements:
+            print(f"⚠️  Max refinements reached ({max_refinements}), proceeding with current output")
+            return "proceed"
+        
+        # Request refinement only if under limit
+        print(f"🔄 Requesting refinement (attempt {retry_count + 1}/{max_refinements})")
+        return "refine"
     
     def refine_council_output(self, state: RIAState) -> RIAState:
         """Refine council output based on validation issues."""
@@ -1346,6 +1582,23 @@ Generate the complete refined assessment:"""
         stage3_result = state.get("stage3_result", {})
         content = stage3_result.get("response", "")
         
+        # DEBUG: Save raw LLM output to file for inspection
+        try:
+            import os
+            from datetime import datetime
+            debug_dir = Path("debug_outputs")
+            debug_dir.mkdir(exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            debug_file = debug_dir / f"llm_output_{timestamp}.txt"
+            with open(debug_file, 'w', encoding='utf-8') as f:
+                f.write("=" * 80 + "\n")
+                f.write("RAW LLM OUTPUT FOR DEBUGGING\n")
+                f.write("=" * 80 + "\n\n")
+                f.write(content)
+            print(f"💾 Saved raw LLM output to: {debug_file}")
+        except Exception as e:
+            print(f"⚠️  Could not save debug output: {e}")
+        
         sections = {}
         
         # Note: We focus on Belgian RIA structure (21 themes) rather than EU IA sections
@@ -1416,7 +1669,7 @@ Generate the complete refined assessment:"""
         else:
             sections["Proposal Overview"] = ""
         
-        # Extract 21 Belgian impact themes assessments (using both French and English names)
+        # Extract 21 Belgian impact themes assessments (improved pattern matching)
         theme_assessments = {}
         for theme_num, theme_info in self.BELGIAN_IMPACT_THEMES.items():
             theme_name = theme_info["name"]
@@ -1424,33 +1677,88 @@ Generate the complete refined assessment:"""
             french_name = theme_name.split(" / ")[0]
             english_name = theme_name.split(" / ")[1] if " / " in theme_name else theme_name
             
-            # Look for theme in content (case insensitive, try both names)
-            pattern_fr = rf"\b{re.escape(french_name)}\b"
-            pattern_en = rf"\b{re.escape(english_name)}\b"
-            pattern_num = rf"\[{theme_num}\]|Theme {theme_num}|Thème {theme_num}"
+            # Multiple patterns to find theme (more flexible matching)
+            patterns = [
+                rf"\[{theme_num}\]",  # [1], [2], etc. (most reliable)
+                rf"\[{theme_num}\]\s+{re.escape(english_name)}",  # [1] Fight against poverty
+                rf"\[{theme_num}\]\s+{re.escape(french_name)}",  # [1] Lutte contre la pauvreté
+                rf"Theme\s+{theme_num}",  # Theme 1
+                rf"Thème\s+{theme_num}",  # Thème 1
+                rf"{theme_num}\.\s*{re.escape(english_name)}",  # 1. Combating poverty
+                rf"{theme_num}\.\s*{re.escape(french_name)}",  # 1. Lutte contre la pauvreté
+            ]
             
             match = None
-            for pattern in [pattern_fr, pattern_en, pattern_num]:
+            for pattern in patterns:
                 match = re.search(pattern, content, re.IGNORECASE)
                 if match:
                     break
             
             if match:
-                # Extract assessment for this theme (next 200-1000 chars or until next theme)
+                # Extract assessment for this theme
                 start = match.end()
-                # Look for next theme number or end of content
-                next_theme_pattern = rf"\[{theme_num + 1}\]|Theme {theme_num + 1}|Thème {theme_num + 1}"
-                next_match = re.search(next_theme_pattern, content[start:start+1500], re.IGNORECASE)
-                end = start + (next_match.start() if next_match else min(1000, len(content) - start))
+                
+                # Look for "Assessment:" keyword after the theme header
+                assessment_pattern = r"Assessment:\s*(\[POSITIVE IMPACT\]|\[NEGATIVE IMPACT\]|\[NO IMPACT\]|Positive|Negative|No impact)"
+                assessment_match = re.search(assessment_pattern, content[start:start+500], re.IGNORECASE)
+                
+                if assessment_match:
+                    # Start extraction from after "Assessment:" 
+                    assessment_start = start + assessment_match.end()
+                else:
+                    # If no "Assessment:" keyword, start from match end
+                    assessment_start = start
+                
+                # Look for next theme number or section end
+                next_theme_patterns = [
+                    rf"\[{theme_num + 1}\]",
+                    rf"Theme\s+{theme_num + 1}",
+                    rf"Thème\s+{theme_num + 1}",
+                    rf"{theme_num + 1}\.\s+",
+                    r"Overall Assessment|Recommendations|5\.|6\."
+                ]
+                
+                end = len(content)
+                for next_pattern in next_theme_patterns:
+                    next_match = re.search(next_pattern, content[assessment_start:assessment_start+2000], re.IGNORECASE)
+                    if next_match:
+                        end = assessment_start + next_match.start()
+                        break
+                
+                # Extract at least 200 chars, up to 1500 chars
+                extracted = content[assessment_start:end].strip()
+                if len(extracted) < 200 and end < len(content):
+                    # Try to get more content
+                    extended_end = min(assessment_start + 1500, len(content))
+                    extracted = content[assessment_start:extended_end].strip()
+                
                 theme_assessments[theme_num] = {
                     "name": english_name,
-                    "assessment": content[start:end].strip()
+                    "assessment": extracted
                 }
             else:
-                theme_assessments[theme_num] = {
-                    "name": english_name,
-                    "assessment": ""
-                }
+                # Theme not found - try to find it by name only (less reliable)
+                name_patterns = [
+                    rf"\b{re.escape(english_name)}\b",
+                    rf"\b{re.escape(french_name)}\b"
+                ]
+                for name_pattern in name_patterns:
+                    name_match = re.search(name_pattern, content, re.IGNORECASE)
+                    if name_match:
+                        # Found by name, extract nearby content
+                        start = max(0, name_match.start() - 50)
+                        end = min(len(content), name_match.end() + 800)
+                        theme_assessments[theme_num] = {
+                            "name": english_name,
+                            "assessment": content[start:end].strip()
+                        }
+                        break
+                else:
+                    # Not found at all
+                    theme_assessments[theme_num] = {
+                        "name": english_name,
+                        "assessment": ""
+                    }
         
         # Format theme assessments in Belgian RIA structure
         theme_sections = []
@@ -1470,6 +1778,40 @@ Generate the complete refined assessment:"""
         print(f"✅ Extracted {len([s for s in sections.values() if s])} sections")
         assessed_count = len([a for a in theme_assessments.values() if a.get("assessment", "")])
         print(f"✅ Extracted {assessed_count}/21 impact theme assessments")
+        
+        # Debug: If no assessments found, log the content to see what we're working with
+        if assessed_count == 0:
+            print(f"\n⚠️  WARNING: No theme assessments extracted!")
+            print(f"   Content length: {len(content)} chars")
+            print(f"\n   Searching for theme patterns in content...")
+            # Check if themes are mentioned at all
+            found_themes = []
+            for theme_num in range(1, 22):
+                patterns = [rf"\[{theme_num}\]", rf"Theme {theme_num}", rf"Thème {theme_num}"]
+                for pattern in patterns:
+                    if re.search(pattern, content, re.IGNORECASE):
+                        found_themes.append(theme_num)
+                        print(f"   ✅ Found pattern for theme {theme_num}: {pattern}")
+                        break
+            
+            if found_themes:
+                print(f"   Found {len(found_themes)}/21 theme markers: {found_themes}")
+                # Show sample of content around first found theme
+                if found_themes:
+                    theme_num = found_themes[0]
+                    pattern = rf"\[{theme_num}\]"
+                    match = re.search(pattern, content, re.IGNORECASE)
+                    if match:
+                        start = max(0, match.start() - 100)
+                        end = min(len(content), match.end() + 500)
+                        print(f"\n   Sample content around theme {theme_num}:")
+                        print(f"   {content[start:end]}")
+            else:
+                print(f"   ❌ No theme markers found at all!")
+                print(f"   First 1000 chars of content:")
+                print(f"   {content[:1000]}")
+                print(f"\n   Last 1000 chars of content:")
+                print(f"   {content[-1000:]}")
         
         return {**state, "structured_sections": sections}
     
@@ -1648,14 +1990,26 @@ Generate the complete refined assessment:"""
     async def _openai_fallback(self, state: RIAState, query: str) -> RIAState:
         """Fallback to OpenAI when council is not available."""
         try:
-            from openai import OpenAI
+            # Use direct API instead of OpenAI library to avoid issues
+            from backend.direct_apis import query_openai
             import os
             
             api_key = os.getenv("OPENAI_API_KEY")
             if not api_key:
                 return self._add_error(state, "No OpenAI API key found")
             
-            client = OpenAI(api_key=api_key)
+            # Use direct API call
+            messages = [
+                {"role": "system", "content": "You are an expert in both Belgian Regulatory Impact Assessments (RIA) and EU Impact Assessments. Your task is to generate Belgian RIA reports that:\n- Follow the standard Belgian RIA structure with all 21 impact themes\n- Use EU-style detailed, evidence-based analysis\n- Map EU domain knowledge to Belgian categories\n- Provide comprehensive assessments with clear positive/negative/no impact determinations for each theme\n- Use formal, analytical tone consistent with EU Impact Assessment documents\n- Include a Background/Problem Definition section as the FIRST and MOST IMPORTANT section\n- Cite retrieved documents (e.g., SWD references, COM references, Belgian RIA document IDs) when referencing their analysis patterns, methodologies, or evidence"},
+                {"role": "user", "content": query}
+            ]
+            
+            response = await query_openai(messages, model="gpt-4")
+            
+            if not response or not response.get("content"):
+                return self._add_error(state, "OpenAI API returned empty response")
+            
+            content = response.get("content", "")
             
             # Build detailed prompt with Belgian RIA structure and EU analysis style
             themes_list = []
@@ -1704,7 +2058,25 @@ Structure your response as follows:
 1. Background and Problem Definition (MOST IMPORTANT - define the problem, context, and why this regulation is needed)
 2. Executive Summary
 3. Proposal Overview
-4. 21 Impact Themes Assessment (one section per theme, numbered [1] through [21])
+4. 21 Impact Themes Assessment - FORMAT IS CRITICAL:
+   You MUST format each theme assessment EXACTLY as follows:
+   
+   [1] Fight against poverty
+   Keywords: [keywords from above]
+   Assessment: [POSITIVE IMPACT] / [NEGATIVE IMPACT] / [NO IMPACT]
+   [Detailed explanation with evidence, citations, and analysis]
+   
+   [2] Equal opportunities and social cohesion
+   Keywords: [keywords from above]
+   Assessment: [POSITIVE IMPACT] / [NEGATIVE IMPACT] / [NO IMPACT]
+   [Detailed explanation with evidence, citations, and analysis]
+   
+   ... continue for ALL 21 themes numbered [1] through [21]
+   
+   IMPORTANT: Each theme MUST start with [N] where N is the theme number (1-21)
+   Each theme MUST include "Assessment:" followed by [POSITIVE IMPACT] / [NEGATIVE IMPACT] / [NO IMPACT]
+   Each theme MUST include a detailed explanation (at least 100 words)
+   
 5. Overall Assessment Summary
 6. Recommendations
 
@@ -1717,7 +2089,32 @@ CITATION REQUIREMENTS:
   * Citing evidence or data patterns from similar assessments
   * Drawing on policy option evaluation frameworks
 
-Use EU analytical depth but maintain Belgian RIA form structure."""
+Use EU analytical depth but maintain Belgian RIA form structure.
+
+MANDATORY OUTPUT FORMAT - YOU MUST FOLLOW THIS EXACTLY:
+For the "21 Impact Themes Assessment" section, you MUST format it as:
+
+4. 21 Impact Themes Assessment
+
+[1] Fight against poverty
+Keywords: Revenu minimum conforme à la dignité humaine, accès à des services de qualité, surendettement, risque de pauvreté ou d'exclusion sociale (y compris chez les mineurs), illettrisme, fracture numérique
+Assessment: [POSITIVE IMPACT] / [NEGATIVE IMPACT] / [NO IMPACT]
+[Provide detailed explanation here - minimum 100 words explaining why this impact type, with evidence and analysis]
+
+[2] Equal opportunities and social cohesion
+Keywords: Non-discrimination, égalité de traitement, accès aux biens et services, accès à l'information, à l'éducation et à la formation, écart de revenu, effectivité des droits civils, politiques et sociaux (en particulier pour les populations fragilisées, les enfants, les personnes âgées, les personnes handicapées et les minorités)
+Assessment: [POSITIVE IMPACT] / [NEGATIVE IMPACT] / [NO IMPACT]
+[Provide detailed explanation here]
+
+... continue for ALL 21 themes [1] through [21]
+
+CRITICAL: Each theme MUST:
+- Start with [N] where N is the theme number (1-21)
+- Include "Keywords:" followed by the keywords
+- Include "Assessment:" followed by [POSITIVE IMPACT] / [NEGATIVE IMPACT] / [NO IMPACT]
+- Include a detailed explanation (minimum 100 words)
+
+DO NOT skip any themes. Assess ALL 21 themes even if the impact is minimal or none."""
             
             print("   Using OpenAI GPT-4 for Belgian RIA assessment (EU analysis style)...")
             response = client.chat.completions.create(
@@ -1730,6 +2127,17 @@ Use EU analytical depth but maintain Belgian RIA form structure."""
             )
             
             content = response.choices[0].message.content
+            
+            # Debug: Check if content contains theme assessments
+            if content:
+                theme_found_count = 0
+                for theme_num in range(1, 22):
+                    if re.search(rf"\[{theme_num}\]", content, re.IGNORECASE):
+                        theme_found_count += 1
+                print(f"   Found {theme_found_count}/21 theme markers in LLM output")
+                if theme_found_count == 0:
+                    print(f"   ⚠️  WARNING: No theme markers found in LLM output!")
+                    print(f"   First 1000 chars: {content[:1000]}")
             
             # Create mock stage results for compatibility
             stage1_results = [{"model": "gpt-4", "response": content}]
@@ -1787,10 +2195,10 @@ async def run_ria_workflow(
         "context": context or {}
     }
     
-    # Run workflow with reasonable recursion limit
-    # Normal flow: ingest -> extract -> route -> retrieve -> merge -> check -> synthesize -> validate -> council -> extract -> structure -> quality -> review -> report -> kb -> END
-    # That's about 15-20 steps, so 100 should be plenty even with a few retries
-    config = {"recursion_limit": 100}
+    # Run workflow with recursion limit
+    # Normal flow: ingest -> extract -> route -> retrieve -> merge -> check -> synthesize -> council -> validate -> extract -> structure -> quality -> review -> report -> kb -> END
+    # That's about 15-20 steps, no loops
+    config = {"recursion_limit": 50}  # Reduced since we removed loops
     final_state = await workflow.graph.ainvoke(initial_state, config=config)
     
     return final_state

@@ -13,17 +13,26 @@ from .config import (
     USE_DIRECT_APIS
 )
 
-# Import API clients - prefer direct APIs, fallback to OpenRouter
+# Import API clients - use direct APIs only (no OpenRouter fallback)
 if USE_DIRECT_APIS:
     try:
         from .direct_apis import query_models_parallel_direct as query_models_parallel, query_model_direct as query_model
         print("✅ Using direct APIs (Anthropic, Google, xAI, OpenAI)")
-    except ImportError:
-        from .openrouter import query_models_parallel, query_model
-        print("⚠️  Direct APIs not available, using OpenRouter")
+    except ImportError as e:
+        raise RuntimeError(
+            f"Direct APIs import failed: {e}. "
+            "Please ensure all API keys are set in .env file. "
+            "OpenRouter is not used in this system."
+        )
 else:
-    from .openrouter import query_models_parallel, query_model
-    print("⚠️  Using OpenRouter (direct API keys not found)")
+    raise RuntimeError(
+        "No direct API keys found. Please set API keys in .env file:\n"
+        "  - OPENAI_API_KEY\n"
+        "  - ANTHROPIC_API_KEY\n"
+        "  - GOOGLE_API_KEY\n"
+        "  - XAI_API_KEY\n"
+        "OpenRouter is not used in this system."
+    )
 
 
 async def stage1_collect_responses(
@@ -35,7 +44,7 @@ async def stage1_collect_responses(
     Stage 1: Collect individual responses from all council models.
     
     For RIA generation, models are assigned specialized roles:
-    - Claude: Problem definition and policy analysis specialist
+    - Claude: Policy analysis specialist
     - Gemini: Evidence synthesis and data interpretation specialist
     - Grok: Impact assessment and risk analysis specialist
 
@@ -81,18 +90,18 @@ Retrieved Context:
 
 Generate detailed impact assessments for all 21 Belgian RIA themes."""
             elif "openai" in model or "gpt" in model:
-                # OpenAI: Problem definition and general analysis specialist
+                # OpenAI: General analysis specialist
                 specialized_queries[model] = f"""{user_query}
 
-You are a Problem Definition and Policy Analysis Specialist. Focus on:
-- Comprehensive problem definition and background
-- Policy context and regulatory gaps
+You are a Policy Analysis and General Analysis Specialist. Focus on:
+- Policy context and regulatory analysis
 - Drawing insights from retrieved EU Impact Assessment documents
+- Comprehensive impact assessment structure
 
 Retrieved Context:
 {context[:2000] if len(context) > 2000 else context}
 
-Generate a detailed Background/Problem Definition section and overall assessment structure."""
+Generate a comprehensive assessment structure with detailed analysis."""
         
         # Use specialized queries if available, otherwise use general query
         queries = {}
@@ -124,7 +133,7 @@ Retrieved Context:
     
     import asyncio
     responses_list = await asyncio.gather(*tasks, return_exceptions=True)
-    
+
     # Format results
     stage1_results = []
     for model, response in zip(model_list, responses_list):
@@ -184,7 +193,7 @@ Your task:
    - Adherence to Belgian RIA structure (21 impact themes)
    - Quality of EU-style detailed analysis
    - Proper use of retrieved context and citations
-   - Completeness of Background/Problem Definition section
+   - Completeness of 21 Impact Themes Assessment (all themes must be assessed)
 4. Then, at the very end of your response, provide a final ranking.
 
 IMPORTANT: Your final ranking MUST be formatted EXACTLY as follows:
@@ -329,6 +338,11 @@ async def stage2_collect_rankings(
     Returns:
         Tuple of (rankings list, label_to_model mapping)
     """
+    # Handle empty results
+    if not stage1_results or len(stage1_results) == 0:
+        print("⚠️  No Stage 1 results to rank - returning empty rankings")
+        return [], {}
+    
     # Create anonymized labels for responses (Response A, Response B, etc.)
     labels = [chr(65 + i) for i in range(len(stage1_results))]  # A, B, C, ...
     
@@ -524,11 +538,175 @@ Now provide your evaluation and ranking:"""
     return stage2_results, label_to_model
 
 
+# Theme definitions for chunked generation
+THEME_DEFINITIONS = {
+    1: {
+        "name": "Fight against poverty",
+        "keywords": "Revenu minimum conforme à la dignité humaine, accès à des services de qualité, surendettement, risque de pauvreté ou d'exclusion sociale (y compris chez les mineurs), illettrisme, fracture numérique"
+    },
+    2: {
+        "name": "Equal opportunities and social cohesion",
+        "keywords": "Non-discrimination, égalité de traitement, accès aux biens et services, accès à l'information, à l'éducation et à la formation, écart de revenu, effectivité des droits civils, politiques et sociaux (en particulier pour les populations fragilisées, les enfants, les personnes âgées, les personnes handicapées et les minorités)"
+    },
+    3: {
+        "name": "Equality between women and men",
+        "keywords": "Accès des femmes et des hommes aux ressources: revenus, travail, responsabilités, santé/soins/bien-être, sécurité, éducation/savoir/formation, mobilité, temps, loisirs, etc. Exercice des droits fondamentaux par les femmes et les hommes droits civils, sociaux et politiques"
+    },
+    4: {
+        "name": "Health",
+        "keywords": "Accès aux soins de santé de qualité, efficacité de l'offre de soins, espérance de vie en bonne santé, traitements des maladies chroniques (maladies cardiovasculaires, cancers, diabètes et maladies respiratoires chroniques), déterminants de la santé (niveau socio-économique, alimentation, pollution), qualité de la vie"
+    },
+    5: {
+        "name": "Employment",
+        "keywords": "Accès au marché de l'emploi, emplois de qualité, chômage, travail au noir, conditions de travail et de licenciement, carrière, temps de travail, bien-être au travail, accidents de travail, maladies professionnelles, équilibre vie privée - vie professionnelle, rémunération convenable, possibilités de formation professionnelle, relations collectives de travail"
+    },
+    6: {
+        "name": "Consumption and production patterns",
+        "keywords": "Stabilité/prévisibilité des prix, information et protection du consommateur, utilisation efficace des ressources, évaluation et intégration des externalités (environnementales et sociales) tout au long du cycle de vie des produits et services, modes de gestion des organisations"
+    },
+    7: {
+        "name": "Economic development",
+        "keywords": "Création d'entreprises, production de biens et de services, productivité du travail et des ressources/matières premières, facteurs de compétitivité, accès au marché et à la profession, transparence du marché, accès aux marchés publics, relations commerciales et financières internationales, balance des importations/exportations, économie souterraine, sécurité d'approvisionnement des ressources énergétiques, minérales et organiques"
+    },
+    8: {
+        "name": "Investments",
+        "keywords": "Investissements en capital physique (machines, véhicules, infrastructures), technologique, intellectuel (logiciel, recherche et développement) et humain, niveau d'investissement net en pourcentage du PIB"
+    },
+    9: {
+        "name": "Research and development",
+        "keywords": "Opportunités de recherche et développement, innovation par l'introduction et la diffusion de nouveaux modes de production, de nouvelles pratiques d'entreprises ou de nouveaux produits et services, dépenses de recherche et de développement"
+    },
+    10: {
+        "name": "SMEs (Small and Medium-Sized Enterprises)",
+        "keywords": "Impact sur le développement des PME"
+    },
+    11: {
+        "name": "Administrative burdens",
+        "keywords": "Réduction des formalités et des obligations administratives liées directement ou indirectement à l'exécution, au respect et/ou au maintien d'un droit, d'une interdiction ou d'une obligation"
+    },
+    12: {
+        "name": "Energy",
+        "keywords": "Mix énergétique (bas carbone, renouvelable, fossile), utilisation de la biomasse (bois, biocarburants), efficacité énergétique, consommation d'énergie de l'industrie, des services, des transports et des ménages, sécurité d'approvisionnement, accès aux biens et services énergétiques"
+    },
+    13: {
+        "name": "Mobility",
+        "keywords": "Volume de transport (nombre de kilomètres parcourus et nombre de véhicules), offre de transports collectifs, offre routière, ferroviaire, maritime et fluviale pour les transports de marchandises, répartitions des modes de transport (modal shift), sécurité, densité du trafic"
+    },
+    14: {
+        "name": "Food",
+        "keywords": "Accès à une alimentation sûre (contrôle de qualité), alimentation saine et à haute valeur nutritionnelle, gaspillages, commerce équitable"
+    },
+    15: {
+        "name": "Climate change",
+        "keywords": "Émissions de gaz à effet de serre, capacité d'adaptation aux effets des changements climatiques, résilience, transition énergétique, sources d'énergies renouvelables, utilisation rationnelle de l'énergie, efficacité énergétique, performance énergétique des bâtiments, piégeage du carbone"
+    },
+    16: {
+        "name": "Natural resources",
+        "keywords": "Gestion efficiente des ressources, recyclage, réutilisation, qualité et consommation de l'eau (eaux de surface et souterraines, mers et océans), qualité et utilisation du sol (pollution, teneur en matières organiques, érosion, assèchement, inondations, densification, fragmentation), déforestation"
+    },
+    17: {
+        "name": "Indoor and outdoor air",
+        "keywords": "Qualité de l'air (y compris l'air intérieur), émissions de polluants (agents chimiques ou biologiques méthane, hydrocarbures, solvants, SOX, NOx, NH3), particules fines"
+    },
+    18: {
+        "name": "Biodiversity",
+        "keywords": "Niveaux de la diversité biologique, état des écosystèmes (restauration, conservation, valorisation, zones protégées), altération et fragmentation des habitats, biotechnologies, brevets d'invention sur la matière biologique, utilisation des ressources génétiques, services rendus par les écosystèmes (purification de l'eau et de l'air, ...), espèces domestiquées ou cultivées, espèces exotiques envahissantes, espèces menacées"
+    },
+    19: {
+        "name": "Nuisances",
+        "keywords": "Nuisances sonores, visuelles ou olfactives, vibrations, rayonnements ionisants, non ionisants et électromagnétiques, nuisances lumineuses"
+    },
+    20: {
+        "name": "Public authorities",
+        "keywords": "Fonctionnement démocratique des organes de concertation et consultation, services publics aux usagers, plaintes, recours, contestations, mesures d'exécution, investissements publics"
+    },
+    21: {
+        "name": "Policy coherence for development",
+        "keywords": "Prise en considération des impacts involontaires des mesures politiques belges sur les intérêts des pays en voie de développement"
+    }
+}
+
+
+async def _generate_theme_batch(
+    user_query: str,
+    stage1_text: str,
+    stage2_text: str,
+    context_section: str,
+    theme_numbers: List[int],
+    batch_num: int,
+    total_batches: int
+) -> str:
+    """
+    Generate assessment for a batch of themes (chunked generation optimization).
+    
+    Args:
+        user_query: Original proposal query
+        stage1_text: Stage 1 responses text
+        stage2_text: Stage 2 rankings text
+        context_section: Retrieved context
+        theme_numbers: List of theme numbers to generate (e.g., [1, 2, 3, 4, 5, 6, 7])
+        batch_num: Current batch number (1, 2, or 3)
+        total_batches: Total number of batches (3)
+    
+    Returns:
+        Generated text for the theme batch
+    """
+    # Build theme format section for this batch only
+    themes_format = ""
+    for theme_num in theme_numbers:
+        theme_def = THEME_DEFINITIONS[theme_num]
+        themes_format += f"""
+[{theme_num}] {theme_def['name']}
+Keywords: {theme_def['keywords']}
+Assessment: [POSITIVE IMPACT] / [NEGATIVE IMPACT] / [NO IMPACT]
+[Detailed explanation with EU-style analysis - minimum 150 words explaining the impact determination]
+🚨 IF EUROSTAT DATA IS PROVIDED FOR THIS THEME: You MUST include a citation with actual quantitative values (e.g., "According to Eurostat (ilc_li02, Belgium, 2022), the rate was 15.3%") to QUANTIFY your statements. DO NOT write generic statements.
+
+"""
+    
+    batch_prompt = f"""You are the Meta-Chairman of an LLM Council for Belgian Regulatory Impact Assessment generation. Multiple AI models have provided specialized responses, and then ranked each other's responses.
+
+Original Query: {user_query}
+{context_section}
+
+STAGE 1 - Individual Responses (from specialized models):
+{stage1_text[:3000]}...
+
+STAGE 2 - Peer Rankings:
+{stage2_text[:1500]}...
+
+Your task: Generate assessments for themes [{theme_numbers[0]}] through [{theme_numbers[-1]}] ONLY.
+
+CRITICAL REQUIREMENTS:
+1. You MUST assess ONLY themes {theme_numbers} in this batch (batch {batch_num} of {total_batches})
+2. Each theme MUST have:
+   - Assessment: [POSITIVE IMPACT] / [NEGATIVE IMPACT] / [NO IMPACT]
+   - Detailed explanation (minimum 150 words)
+   - Eurostat citation with quantitative values if data is provided
+3. Use retrieved context and Eurostat data provided above
+4. DO NOT include any other sections (Executive Summary, Proposal Overview, etc.)
+
+MANDATORY FORMAT FOR THIS BATCH:
+{themes_format}
+
+Generate ONLY the assessments for themes {theme_numbers}. Start directly with theme [{theme_numbers[0]}] and end with theme [{theme_numbers[-1]}]."""
+
+    messages = [{"role": "user", "content": batch_prompt}]
+    response = await query_model(CHAIRMAN_MODEL, messages, timeout=120.0)  # Reduced timeout per batch
+    
+    if response is None:
+        return f"\n[Error generating batch {batch_num}]\n"
+    
+    return response.get('content', '')
+
+
 async def stage3_synthesize_final(
     user_query: str,
     stage1_results: List[Dict[str, Any]],
     stage2_results: List[Dict[str, Any]],
-    context: Optional[str] = None
+    context: Optional[str] = None,
+    retry_attempt: int = 0,
+    use_chunked_generation: bool = True
 ) -> Dict[str, Any]:
     """
     Stage 3: Chairman synthesizes final response.
@@ -553,21 +731,57 @@ async def stage3_synthesize_final(
         f"Model: {result['model']}\nRanking: {result['ranking']}"
         for result in stage2_results
     ])
-    
+
     context_section = ""
     if context:
+        # OPTIMIZATION: Reduced context limit - Eurostat is now compressed (one stat per theme)
+        # Use 5000 chars (reduced from 8000) since Eurostat data is now more compact
+        context_limit = 5000
+        truncated_context = context[:context_limit] if len(context) > context_limit else context
+        
+        # If we truncated, try to preserve Eurostat section if it exists
+        if len(context) > context_limit and "Eurostat Statistical Data" in context:
+            # Find where Eurostat section ends
+            eurostat_end = context.find("=" * 70, context.find("CRITICAL: MANDATORY EUROSTAT DATA USAGE"))
+            if eurostat_end != -1:
+                # Include full Eurostat section + some document context
+                eurostat_section = context[:eurostat_end + 100]
+                remaining_chars = context_limit - len(eurostat_section)
+                if remaining_chars > 0:
+                    # Add document context after Eurostat
+                    doc_section_start = context.find("RELEVANT DOCUMENTS", eurostat_end)
+                    if doc_section_start != -1:
+                        doc_section = context[doc_section_start:doc_section_start + remaining_chars]
+                        truncated_context = eurostat_section + "\n\n" + doc_section
+                    else:
+                        truncated_context = eurostat_section + context[eurostat_end + 100:eurostat_end + 100 + remaining_chars]
+        
         context_section = f"""
 
 RETRIEVED CONTEXT (from EU and Belgian RIA documents):
-{context[:3000] if len(context) > 3000 else context}
+{truncated_context}
 
 Use this context to ensure your synthesis:
 - References specific documents where appropriate (e.g., SWD(2022) 167 final)
 - Uses similar analysis patterns from retrieved EU documents
-- Maintains consistency with Belgian RIA structure"""
+- Maintains consistency with Belgian RIA structure
+- 🚨 CRITICAL: If Eurostat statistical data is provided above, you MUST use it with citations and quantitative values"""
 
+    # Add retry warning if this is a retry
+    retry_warning = ""
+    if retry_attempt > 0:
+        retry_warning = f"""
+
+⚠️⚠️⚠️ CRITICAL: THIS IS A RETRY ATTEMPT ⚠️⚠️⚠️
+The previous response did not include all 21 required impact themes. 
+You MUST include ALL 21 themes numbered [1] through [21] in your response.
+DO NOT skip any themes. Assess each one as POSITIVE IMPACT, NEGATIVE IMPACT, or NO IMPACT.
+Your response will be rejected again if it does not contain all 21 themes.
+
+"""
+    
     chairman_prompt = f"""You are the Meta-Chairman of an LLM Council for Belgian Regulatory Impact Assessment generation. Multiple AI models have provided specialized responses, and then ranked each other's responses.
-
+{retry_warning}
 Original Query: {user_query}
 {context_section}
 
@@ -580,11 +794,228 @@ STAGE 2 - Peer Rankings:
 Your task as Meta-Chairman is to synthesize all of this information into a single, comprehensive Belgian RIA assessment. 
 
 CRITICAL REQUIREMENTS:
-1. Structure: Background/Problem Definition (FIRST), Executive Summary, Proposal Overview, 21 Impact Themes Assessment, Overall Assessment Summary, Recommendations
-2. Use retrieved context: Reference specific EU documents (SWD, COM references) and Belgian RIA examples where relevant
-3. Citations: Include citations when referencing analysis patterns or methodologies from retrieved documents
-4. Completeness: Ensure all 21 impact themes are assessed with clear positive/negative/no impact determinations
-5. Quality: Use EU-style detailed, evidence-based analysis while maintaining Belgian RIA form structure
+1. Structure: 21 Impact Themes Assessment ONLY
+   - DO NOT include Executive Summary
+   - DO NOT include Proposal Overview
+   - DO NOT include Overall Assessment Summary
+   - Your report MUST contain ONLY the "21 Belgian Impact Themes Assessment" section
+2. FORBIDDEN SECTIONS - CRITICAL: DO NOT include ANY of the following sections ANYWHERE in your report:
+   - Current Legal Framework (or "Legal Framework")
+   - Problem Identification
+   - Policy Objectives
+   - Stakeholders Affected (or "Stakeholders")
+   These sections are FORBIDDEN and must NOT appear as standalone sections, subsections, or within any other section.
+   If you mention legal context, problems, objectives, or stakeholders, integrate them naturally into the theme assessments WITHOUT creating separate sections with these titles.
+3. Use retrieved context: Reference specific EU documents (SWD, COM references) and Belgian RIA examples where relevant
+3. Use Eurostat data: If Eurostat statistical data is provided in the context, you MUST:
+   - 🚨 MANDATORY: For EVERY theme where Eurostat data is provided, you MUST include the citation WITH actual quantitative values
+   - The data is formatted as "READY-TO-USE CITATION" - copy it directly into your assessment text
+   - The PURPOSE is to QUANTIFY your statements - you MUST include the numbers/percentages provided
+   - Example CORRECT: "According to Eurostat (ilc_li02, Belgium, 2022), the at-risk-of-poverty rate for persons aged 65+ in Belgium was 15.3%"
+   - Example CORRECT: "Eurostat data (ilc_li02, Belgium, 2022) shows that the at-risk-of-poverty rate was 15.3%, with breakdowns showing rates of 4.0% for children under 6 years, 2.9% for males overall, and 3.4% for males under 6 years"
+   - Example WRONG: "According to Eurostat data, poverty is an issue" [missing citation and values - REJECTED]
+   - Example WRONG: "According to Eurostat (ilc_li02, Belgium, 2022)" [missing actual statistic - REJECTED]
+   - Use the actual values to establish baseline conditions and QUANTIFY expected impacts
+   - Format statistics clearly with units (%, thousands, billions, etc.) and context (age groups, gender, etc.)
+   - Count how many themes have Eurostat data - you must cite at least 80% of them
+   - Your response will be REJECTED if you ignore available Eurostat data and write generic statements instead
+4. Citations: Include citations when referencing analysis patterns or methodologies from retrieved documents AND when using Eurostat statistics. For themes with Eurostat data provided, you MUST cite it.
+5. Completeness: Ensure all 21 impact themes are assessed with clear positive/negative/no impact determinations
+6. Quality: Use EU-style detailed, evidence-based analysis while maintaining Belgian RIA form structure. When Eurostat data is available, integrate it naturally into your analysis to provide quantitative context with actual numbers
+7. FORBIDDEN CONTENT - ABSOLUTE PROHIBITION: 
+   DO NOT create sections titled:
+   - "Current Legal Framework" or "Legal Framework"
+   - "Problem Identification" 
+   - "Policy Objectives"
+   - "Stakeholders Affected" or "Stakeholders"
+   
+   These section titles are FORBIDDEN. If you need to discuss legal context, problems, objectives, or stakeholders, integrate them into the theme assessments WITHOUT using these specific section titles. Your response will be REJECTED if these section titles appear.
+   
+   FORBIDDEN SECTIONS - ALSO DO NOT INCLUDE:
+   - Executive Summary
+   - Proposal Overview
+   - Overall Assessment Summary
+   - Recommendations
+   - Conclusion
+   
+   Your report MUST contain ONLY the "21 Belgian Impact Themes Assessment" section.
+
+MANDATORY FORMAT FOR 21 BELGIAN IMPACT THEMES ASSESSMENT:
+You MUST assess ALL 21 Belgian RIA themes using EXACTLY this format:
+
+[1] Fight against poverty
+Keywords: Revenu minimum conforme à la dignité humaine, accès à des services de qualité, surendettement, risque de pauvreté ou d'exclusion sociale (y compris chez les mineurs), illettrisme, fracture numérique
+Assessment: [POSITIVE IMPACT] / [NEGATIVE IMPACT] / [NO IMPACT]
+[Detailed explanation with EU-style analysis - minimum 150 words explaining the impact determination]
+🚨 IF EUROSTAT DATA IS PROVIDED FOR THIS THEME: You MUST include a citation with actual quantitative values (e.g., "According to Eurostat (ilc_li02, Belgium, 2022), the rate was 15.3%") to QUANTIFY your statements. DO NOT write generic statements.
+IMPORTANT: If Eurostat data is provided for this theme in the context, you MUST include a citation with actual quantitative values (e.g., "According to Eurostat (ilc_li02, Belgium, 2022), the rate was 15.3%") to QUANTIFY your statements.
+
+[2] Equal opportunities and social cohesion
+Keywords: Non-discrimination, égalité de traitement, accès aux biens et services, accès à l'information, à l'éducation et à la formation, écart de revenu, effectivité des droits civils, politiques et sociaux (en particulier pour les populations fragilisées, les enfants, les personnes âgées, les personnes handicapées et les minorités)
+Assessment: [POSITIVE IMPACT] / [NEGATIVE IMPACT] / [NO IMPACT]
+[Detailed explanation with EU-style analysis - minimum 150 words]
+
+[3] Equality between women and men
+Keywords: Accès des femmes et des hommes aux ressources: revenus, travail, responsabilités, santé/soins/bien-être, sécurité, éducation/savoir/formation, mobilité, temps, loisirs, etc. Exercice des droits fondamentaux par les femmes et les hommes droits civils, sociaux et politiques
+Assessment: [POSITIVE IMPACT] / [NEGATIVE IMPACT] / [NO IMPACT]
+[Detailed explanation with EU-style analysis - minimum 150 words]
+
+[4] Health
+Keywords: Accès aux soins de santé de qualité, efficacité de l'offre de soins, espérance de vie en bonne santé, traitements des maladies chroniques (maladies cardiovasculaires, cancers, diabètes et maladies respiratoires chroniques), déterminants de la santé (niveau socio-économique, alimentation, pollution), qualité de la vie
+Assessment: [POSITIVE IMPACT] / [NEGATIVE IMPACT] / [NO IMPACT]
+[Detailed explanation with EU-style analysis - minimum 150 words]
+
+[5] Employment
+Keywords: Accès au marché de l'emploi, emplois de qualité, chômage, travail au noir, conditions de travail et de licenciement, carrière, temps de travail, bien-être au travail, accidents de travail, maladies professionnelles, équilibre vie privée - vie professionnelle, rémunération convenable, possibilités de formation professionnelle, relations collectives de travail
+Assessment: [POSITIVE IMPACT] / [NEGATIVE IMPACT] / [NO IMPACT]
+[Detailed explanation with EU-style analysis - minimum 150 words]
+
+[6] Consumption and production patterns
+Keywords: Stabilité/prévisibilité des prix, information et protection du consommateur, utilisation efficace des ressources, évaluation et intégration des externalités (environnementales et sociales) tout au long du cycle de vie des produits et services, modes de gestion des organisations
+Assessment: [POSITIVE IMPACT] / [NEGATIVE IMPACT] / [NO IMPACT]
+[Detailed explanation with EU-style analysis - minimum 150 words]
+
+[7] Economic development
+Keywords: Création d'entreprises, production de biens et de services, productivité du travail et des ressources/matières premières, facteurs de compétitivité, accès au marché et à la profession, transparence du marché, accès aux marchés publics, relations commerciales et financières internationales, balance des importations/exportations, économie souterraine, sécurité d'approvisionnement des ressources énergétiques, minérales et organiques
+Assessment: [POSITIVE IMPACT] / [NEGATIVE IMPACT] / [NO IMPACT]
+[Detailed explanation with EU-style analysis - minimum 150 words]
+
+[8] Investments
+Keywords: Investissements en capital physique (machines, véhicules, infrastructures), technologique, intellectuel (logiciel, recherche et développement) et humain, niveau d'investissement net en pourcentage du PIB
+Assessment: [POSITIVE IMPACT] / [NEGATIVE IMPACT] / [NO IMPACT]
+[Detailed explanation with EU-style analysis - minimum 150 words]
+
+[9] Research and development
+Keywords: Opportunités de recherche et développement, innovation par l'introduction et la diffusion de nouveaux modes de production, de nouvelles pratiques d'entreprises ou de nouveaux produits et services, dépenses de recherche et de développement
+Assessment: [POSITIVE IMPACT] / [NEGATIVE IMPACT] / [NO IMPACT]
+[Detailed explanation with EU-style analysis - minimum 150 words]
+
+[10] SMEs (Small and Medium-Sized Enterprises)
+Keywords: Impact sur le développement des PME
+Assessment: [POSITIVE IMPACT] / [NEGATIVE IMPACT] / [NO IMPACT]
+[Detailed explanation with EU-style analysis - minimum 150 words]
+
+[11] Administrative burdens
+Keywords: Réduction des formalités et des obligations administratives liées directement ou indirectement à l'exécution, au respect et/ou au maintien d'un droit, d'une interdiction ou d'une obligation
+Assessment: [POSITIVE IMPACT] / [NEGATIVE IMPACT] / [NO IMPACT]
+[Detailed explanation with EU-style analysis - minimum 150 words]
+
+[12] Energy
+Keywords: Mix énergétique (bas carbone, renouvelable, fossile), utilisation de la biomasse (bois, biocarburants), efficacité énergétique, consommation d'énergie de l'industrie, des services, des transports et des ménages, sécurité d'approvisionnement, accès aux biens et services énergétiques
+Assessment: [POSITIVE IMPACT] / [NEGATIVE IMPACT] / [NO IMPACT]
+[Detailed explanation with EU-style analysis - minimum 150 words]
+
+[13] Mobility
+Keywords: Volume de transport (nombre de kilomètres parcourus et nombre de véhicules), offre de transports collectifs, offre routière, ferroviaire, maritime et fluviale pour les transports de marchandises, répartitions des modes de transport (modal shift), sécurité, densité du trafic
+Assessment: [POSITIVE IMPACT] / [NEGATIVE IMPACT] / [NO IMPACT]
+[Detailed explanation with EU-style analysis - minimum 150 words]
+
+[14] Food
+Keywords: Accès à une alimentation sûre (contrôle de qualité), alimentation saine et à haute valeur nutritionnelle, gaspillages, commerce équitable
+Assessment: [POSITIVE IMPACT] / [NEGATIVE IMPACT] / [NO IMPACT]
+[Detailed explanation with EU-style analysis - minimum 150 words]
+
+[15] Climate change
+Keywords: Émissions de gaz à effet de serre, capacité d'adaptation aux effets des changements climatiques, résilience, transition énergétique, sources d'énergies renouvelables, utilisation rationnelle de l'énergie, efficacité énergétique, performance énergétique des bâtiments, piégeage du carbone
+Assessment: [POSITIVE IMPACT] / [NEGATIVE IMPACT] / [NO IMPACT]
+[Detailed explanation with EU-style analysis - minimum 150 words]
+
+[16] Natural resources
+Keywords: Gestion efficiente des ressources, recyclage, réutilisation, qualité et consommation de l'eau (eaux de surface et souterraines, mers et océans), qualité et utilisation du sol (pollution, teneur en matières organiques, érosion, assèchement, inondations, densification, fragmentation), déforestation
+Assessment: [POSITIVE IMPACT] / [NEGATIVE IMPACT] / [NO IMPACT]
+[Detailed explanation with EU-style analysis - minimum 150 words]
+
+[17] Indoor and outdoor air
+Keywords: Qualité de l'air (y compris l'air intérieur), émissions de polluants (agents chimiques ou biologiques méthane, hydrocarbures, solvants, SOX, NOx, NH3), particules fines
+Assessment: [POSITIVE IMPACT] / [NEGATIVE IMPACT] / [NO IMPACT]
+[Detailed explanation with EU-style analysis - minimum 150 words]
+
+[18] Biodiversity
+Keywords: Niveaux de la diversité biologique, état des écosystèmes (restauration, conservation, valorisation, zones protégées), altération et fragmentation des habitats, biotechnologies, brevets d'invention sur la matière biologique, utilisation des ressources génétiques, services rendus par les écosystèmes (purification de l'eau et de l'air, ...), espèces domestiquées ou cultivées, espèces exotiques envahissantes, espèces menacées
+Assessment: [POSITIVE IMPACT] / [NEGATIVE IMPACT] / [NO IMPACT]
+[Detailed explanation with EU-style analysis - minimum 150 words]
+
+[19] Nuisances
+Keywords: Nuisances sonores, visuelles ou olfactives, vibrations, rayonnements ionisants, non ionisants et électromagnétiques, nuisances lumineuses
+Assessment: [POSITIVE IMPACT] / [NEGATIVE IMPACT] / [NO IMPACT]
+[Detailed explanation with EU-style analysis - minimum 150 words]
+
+[20] Public authorities
+Keywords: Fonctionnement démocratique des organes de concertation et consultation, services publics aux usagers, plaintes, recours, contestations, mesures d'exécution, investissements publics
+Assessment: [POSITIVE IMPACT] / [NEGATIVE IMPACT] / [NO IMPACT]
+[Detailed explanation with EU-style analysis - minimum 150 words]
+
+[21] Policy coherence for development
+Keywords: Prise en considération des impacts involontaires des mesures politiques belges sur les intérêts des pays en voie de développement
+Assessment: [POSITIVE IMPACT] / [NEGATIVE IMPACT] / [NO IMPACT]
+[Detailed explanation with EU-style analysis - minimum 150 words]
+
+CRITICAL REQUIREMENTS FOR 21 THEMES - THIS IS MANDATORY:
+1. You MUST assess ALL 21 themes numbered [1] through [21] - NO EXCEPTIONS, NO SKIPPING
+2. You MUST provide an actual assessment (POSITIVE IMPACT, NEGATIVE IMPACT, or NO IMPACT) for EACH theme
+3. FORBIDDEN: DO NOT use "MIXED IMPACT" - this is NOT a valid assessment type. You MUST choose ONE of: POSITIVE IMPACT, NEGATIVE IMPACT, or NO IMPACT
+4. If a theme has both positive and negative aspects, you MUST determine which is the NET/OVERALL impact and choose POSITIVE IMPACT or NEGATIVE IMPACT accordingly
+5. DO NOT skip any themes - even if the impact is minimal or zero, you MUST still assess it as NO IMPACT with a detailed explanation
+6. DO NOT write "Not assessed" - you must analyze each theme and determine its impact based on the proposal
+7. Each assessment must include a detailed explanation of at least 150 words explaining why you determined that impact
+8. 🚨 MANDATORY EUROSTAT CITATIONS: For EVERY theme where Eurostat data is provided in the context, you MUST include at least ONE citation with actual quantitative values (percentages, numbers) to QUANTIFY your statements. Look for "READY-TO-USE CITATION" format above and copy it into your text. DO NOT write generic statements when specific data is available.
+9. The themes section MUST contain exactly 21 theme assessments, numbered [1] through [21] in sequence
+10. If a theme has NO IMPACT, you must still provide a detailed explanation (minimum 150 words) explaining why there is no impact
+11. DO NOT only assess themes with positive impacts - you MUST assess ALL themes, including those with negative or no impact
+12. Your response will be REJECTED if it does not contain all 21 theme assessments
+13. Your response will be REJECTED if you use "MIXED IMPACT" - only POSITIVE IMPACT, NEGATIVE IMPACT, or NO IMPACT are allowed
+14. Your response will be REJECTED if you ignore available Eurostat data and write generic unquantified statements
+
+MANDATORY STRUCTURE FOR THEMES SECTION:
+Your "21 Belgian Impact Themes Assessment" section MUST follow this EXACT structure:
+
+## 21 Belgian Impact Themes Assessment
+
+[1] Fight against poverty
+Keywords: [keywords]
+Assessment: [POSITIVE IMPACT / NEGATIVE IMPACT / NO IMPACT]
+[150+ word explanation - MUST include Eurostat citation with quantitative values if data is provided]
+
+[2] Equal opportunities and social cohesion
+Keywords: [keywords]
+Assessment: [POSITIVE IMPACT / NEGATIVE IMPACT / NO IMPACT]
+[150+ word explanation]
+
+[3] Equality between women and men
+Keywords: [keywords]
+Assessment: [POSITIVE IMPACT / NEGATIVE IMPACT / NO IMPACT]
+[150+ word explanation]
+
+... [continue for ALL themes [4] through [21]] ...
+
+[21] Policy coherence for development
+Keywords: [keywords]
+Assessment: [POSITIVE IMPACT / NEGATIVE IMPACT / NO IMPACT]
+[150+ word explanation]
+
+VALIDATION CHECKLIST - Before submitting your response, you MUST verify:
+- [ ] Theme [1] "Fight against poverty" is present with assessment
+- [ ] Theme [2] "Equal opportunities and social cohesion" is present with assessment
+- [ ] Theme [3] "Equality between women and men" is present with assessment
+- [ ] Theme [4] "Health" is present with assessment
+- [ ] Theme [5] "Employment" is present with assessment
+- [ ] Theme [6] "Consumption and production patterns" is present with assessment
+- [ ] Theme [7] "Economic development" is present with assessment
+- [ ] Theme [8] "Investments" is present with assessment
+- [ ] Theme [9] "Research and development" is present with assessment
+- [ ] Theme [10] "SMEs" is present with assessment
+- [ ] Theme [11] "Administrative burdens" is present with assessment
+- [ ] Theme [12] "Energy" is present with assessment
+- [ ] Theme [13] "Mobility" is present with assessment
+- [ ] Theme [14] "Food" is present with assessment
+- [ ] Theme [15] "Climate change" is present with assessment
+- [ ] Theme [16] "Natural resources" is present with assessment
+- [ ] Theme [17] "Indoor and outdoor air" is present with assessment
+- [ ] Theme [18] "Biodiversity" is present with assessment
+- [ ] Theme [19] "Nuisances" is present with assessment
+- [ ] Theme [20] "Public authorities" is present with assessment
+- [ ] Theme [21] "Policy coherence for development" is present with assessment
+- [ ] All 21 themes have either POSITIVE IMPACT, NEGATIVE IMPACT, or NO IMPACT (not "Not assessed")
 
 Consider:
 - The specialized insights from each model (problem definition, evidence synthesis, impact assessment)
@@ -592,12 +1023,80 @@ Consider:
 - Any patterns of agreement or disagreement
 - How to best combine the strengths of each response
 
-Provide a clear, well-reasoned, comprehensive Belgian RIA that represents the council's collective wisdom:"""
+IMPORTANT: DO NOT include any of the following sections:
+   - Executive Summary
+   - Proposal Overview
+   - Overall Assessment Summary
+   - Recommendations
+   - Conclusion
+   
+   Your report MUST contain ONLY the "21 Belgian Impact Themes Assessment" section. Start directly with the themes assessment.
 
+EUROSTAT DATA USAGE - CRITICAL:
+- If Eurostat statistical data is provided in the context, you MUST use it in your assessment
+- For each theme where Eurostat data is available, include at least ONE citation with actual values
+- DO NOT write generic statements when specific Eurostat statistics are provided
+- Count the number of themes with Eurostat data above - you must cite at least 80% of them
+- Your response quality will be judged on whether you used the provided Eurostat data
+
+Provide a clear, well-reasoned, comprehensive Belgian RIA that represents the council's collective wisdom. Remember: ALL 21 THEMES MUST BE ASSESSED - this is non-negotiable. USE THE EUROSTAT DATA PROVIDED."""
+
+    # OPTIMIZATION: Use chunked generation to reduce prompt size and generation time
+    if use_chunked_generation:
+        print(f"🔄 Using chunked generation: 3 batches of 7 themes each")
+        
+        # Define batches: [1-7], [8-14], [15-21]
+        batches = [
+            list(range(1, 8)),   # Themes 1-7
+            list(range(8, 15)),  # Themes 8-14
+            list(range(15, 22))  # Themes 15-21
+        ]
+        
+        batch_results = []
+        for batch_num, theme_numbers in enumerate(batches, 1):
+            print(f"   Generating batch {batch_num}/3: themes {theme_numbers[0]}-{theme_numbers[-1]}")
+            batch_content = await _generate_theme_batch(
+                user_query=user_query,
+                stage1_text=stage1_text,
+                stage2_text=stage2_text,
+                context_section=context_section,
+                theme_numbers=theme_numbers,
+                batch_num=batch_num,
+                total_batches=3
+            )
+            batch_results.append(batch_content)
+        
+        # Combine all batches - ensure proper formatting
+        combined_parts = []
+        combined_parts.append("## 21 Belgian Impact Themes Assessment\n")
+        
+        for batch_content in batch_results:
+            # Remove any duplicate headers from batch results
+            batch_content = batch_content.strip()
+            if batch_content.startswith("##"):
+                # Skip header if present
+                lines = batch_content.split("\n")
+                batch_content = "\n".join(lines[1:]).strip()
+            combined_parts.append(batch_content)
+        
+        combined_response = "\n\n".join(combined_parts)
+        
+        # Debug: Check theme count in combined response
+        import re
+        theme_markers = re.findall(r'\[(\d+)\]', combined_response)
+        unique_themes = set(int(m) for m in theme_markers if m.isdigit() and 1 <= int(m) <= 21)
+        print(f"📊 Chunked generation: Combined {len(batch_results)} batches, found {len(unique_themes)}/21 themes: {sorted(unique_themes)}")
+        
+        return {
+            "model": CHAIRMAN_MODEL,
+            "response": combined_response
+        }
+    
+    # Original single-generation approach (fallback)
     messages = [{"role": "user", "content": chairman_prompt}]
 
-    # Query the chairman model
-    response = await query_model(CHAIRMAN_MODEL, messages)
+    # Query the chairman model with extended timeout for long RIA assessments
+    response = await query_model(CHAIRMAN_MODEL, messages, timeout=300.0)
 
     if response is None:
         # Fallback if chairman fails

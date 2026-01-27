@@ -5,21 +5,30 @@ import httpx
 from typing import List, Dict, Any, Optional
 import asyncio
 
-
-# API Keys from environment
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-XAI_API_KEY = os.getenv("XAI_API_KEY")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+# Import API keys from centralized module
+try:
+    from .api_keys import (
+        ANTHROPIC_API_KEY,
+        GOOGLE_API_KEY,
+        XAI_API_KEY,
+        OPENAI_API_KEY
+    )
+except ImportError:
+    # Fallback to direct environment access
+    ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+    GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+    XAI_API_KEY = os.getenv("XAI_API_KEY")
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 
 async def query_anthropic(
     messages: List[Dict[str, str]],
     model: str = "claude-sonnet-4-20250514",
-    timeout: float = 120.0
+    timeout: float = 300.0  # Increased to 5 minutes for long RIA assessments
 ) -> Optional[Dict[str, Any]]:
     """Query Anthropic Claude API directly."""
     if not ANTHROPIC_API_KEY:
+        print(f"⚠️  ANTHROPIC_API_KEY not set - cannot query Anthropic")
         return None
     
     # Convert messages to Anthropic format
@@ -43,7 +52,7 @@ async def query_anthropic(
     payload = {
         "model": model,
         "messages": anthropic_messages,
-        "max_tokens": 4096
+        "max_tokens": 8192  # Increased for comprehensive RIA reports
     }
     
     if system_message:
@@ -63,8 +72,19 @@ async def query_anthropic(
                 'content': data['content'][0]['text'],
                 'model': model
             }
+    except httpx.HTTPStatusError as e:
+        print(f"Error querying Anthropic {model}: HTTP {e.response.status_code}")
+        try:
+            error_data = e.response.json()
+            error_msg = error_data.get("error", {}).get("message", "Unknown error")
+            print(f"   Error details: {error_msg}")
+        except:
+            print(f"   Response: {e.response.text[:200]}")
+        return None
     except Exception as e:
         print(f"Error querying Anthropic {model}: {e}")
+        import traceback
+        print(f"   Traceback: {traceback.format_exc()}")
         return None
 
 
@@ -75,6 +95,7 @@ async def query_google(
 ) -> Optional[Dict[str, Any]]:
     """Query Google Gemini API directly."""
     if not GOOGLE_API_KEY:
+        print(f"⚠️  GOOGLE_API_KEY not set - cannot query Google")
         return None
     
     # Convert messages to Gemini format
@@ -114,6 +135,7 @@ async def query_xai(
 ) -> Optional[Dict[str, Any]]:
     """Query xAI Grok API directly."""
     if not XAI_API_KEY:
+        print(f"⚠️  XAI_API_KEY not set - cannot query xAI")
         return None
     
     headers = {
@@ -142,8 +164,24 @@ async def query_xai(
                 'content': data['choices'][0]['message']['content'],
                 'model': model
             }
+    except httpx.ConnectError as e:
+        print(f"Error querying xAI {model}: Connection/DNS failed - {e}")
+        print(f"   This might indicate a network connectivity or DNS resolution issue")
+        print(f"   Check your internet connection and DNS settings")
+        return None
+    except httpx.HTTPStatusError as e:
+        print(f"Error querying xAI {model}: HTTP {e.response.status_code}")
+        try:
+            error_data = e.response.json()
+            error_msg = error_data.get("error", {}).get("message", "Unknown error")
+            print(f"   Error details: {error_msg}")
+        except:
+            pass
+        return None
     except Exception as e:
         print(f"Error querying xAI {model}: {e}")
+        import traceback
+        print(f"   Traceback: {traceback.format_exc()}")
         return None
 
 
@@ -154,7 +192,11 @@ async def query_openai(
 ) -> Optional[Dict[str, Any]]:
     """Query OpenAI API directly."""
     if not OPENAI_API_KEY:
+        print(f"⚠️  OPENAI_API_KEY not set - cannot query OpenAI")
         return None
+    
+    # Debug: Show partial key for verification (first 7 chars, which is standard for OpenAI keys)
+    key_preview = f"{OPENAI_API_KEY[:7]}..." if len(OPENAI_API_KEY) > 7 else "***"
     
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",
@@ -164,7 +206,8 @@ async def query_openai(
     payload = {
         "model": model,
         "messages": messages,
-        "temperature": 0.7
+        "temperature": 0.7,
+        "max_tokens": 4096  # Reduced to fit within model's context window
     }
     
     try:
@@ -174,15 +217,57 @@ async def query_openai(
                 headers=headers,
                 json=payload
             )
-            response.raise_for_status()
+            
+            # Better error handling
+            if response.status_code == 401:
+                print(f"❌ OpenAI API authentication failed (401)")
+                print(f"   Key preview: {key_preview}")
+                print(f"   Key length: {len(OPENAI_API_KEY)} chars")
+                print(f"   Please verify your OPENAI_API_KEY is correct and active")
+                response.raise_for_status()
+            elif response.status_code == 429:
+                print(f"⚠️  OpenAI API rate limit exceeded (429) - please wait")
+                response.raise_for_status()
+            else:
+                response.raise_for_status()
+            
             data = response.json()
             
             return {
                 'content': data['choices'][0]['message']['content'],
                 'model': model
             }
+    except httpx.HTTPStatusError as e:
+        print(f"Error querying OpenAI {model}: HTTP {e.response.status_code}")
+        if e.response.status_code == 401:
+            print(f"   Authentication failed - check your API key")
+        elif e.response.status_code == 400:
+            try:
+                error_data = e.response.json()
+                error_msg = error_data.get("error", {}).get("message", "Unknown error")
+                print(f"   Bad Request (400): {error_msg}")
+                print(f"   This might indicate an invalid model name or request format")
+                print(f"   Model used: {model}")
+            except:
+                print(f"   Bad Request (400) - check model name and request format")
+        elif e.response.status_code == 404:
+            print(f"   Model not found (404) - check if '{model}' is a valid OpenAI model")
+        else:
+            try:
+                error_data = e.response.json()
+                error_msg = error_data.get("error", {}).get("message", "Unknown error")
+                print(f"   Error details: {error_msg}")
+            except:
+                pass
+        return None
+    except httpx.ConnectError as e:
+        print(f"Error querying OpenAI {model}: Connection failed - {e}")
+        print(f"   This might indicate a network connectivity issue")
+        return None
     except Exception as e:
         print(f"Error querying OpenAI {model}: {e}")
+        import traceback
+        print(f"   Traceback: {traceback.format_exc()}")
         return None
 
 

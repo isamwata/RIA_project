@@ -1,21 +1,30 @@
 """Configuration for the LLM Council."""
 
 import os
+
+# Load .env file FIRST before importing anything else
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except (ImportError, PermissionError, FileNotFoundError):
-    # If .env file doesn't exist or can't be loaded, continue with environment variables
     pass
 
-# OpenRouter API key (optional - for fallback)
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-
-# Direct API keys (preferred)
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-XAI_API_KEY = os.getenv("XAI_API_KEY")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+# Import API keys from centralized module
+try:
+    from .api_keys import (
+        ANTHROPIC_API_KEY,
+        GOOGLE_API_KEY,
+        XAI_API_KEY,
+        OPENAI_API_KEY,
+        OPENROUTER_API_KEY
+    )
+except ImportError:
+    # Fallback to direct environment access
+    OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+    ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+    GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+    XAI_API_KEY = os.getenv("XAI_API_KEY")
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # Use direct APIs if available, otherwise fallback to OpenRouter
 USE_DIRECT_APIS = bool(ANTHROPIC_API_KEY or GOOGLE_API_KEY or XAI_API_KEY or OPENAI_API_KEY)
@@ -63,12 +72,14 @@ DATA_DIR = "data/conversations"
 # while maintaining semantic coherence of responses
 
 # Number of bootstrap iterations for Stage 2 evaluation
-# Recommended: 5 iterations (good balance of bias reduction vs. cost)
-# Minimum: 3 iterations, Optimal: 7-10 iterations
-BOOTSTRAP_ITERATIONS = 5
+# Recommended: 3 iterations (reduced from 5 to reduce API load and token usage)
+# Minimum: 3 iterations, Optimal: 7-10 iterations (but heavy on API calls)
+# Note: Reduced to 3 to avoid token limit issues and reduce API costs
+BOOTSTRAP_ITERATIONS = 3
 
 # Enable bootstrap evaluation contexts (set to False to use original single evaluation)
-ENABLE_BOOTSTRAP_EVALUATION = True
+# Disabled to reduce API load and token usage - using single evaluation instead
+ENABLE_BOOTSTRAP_EVALUATION = False
 
 # Evaluation criteria variations for bootstrap
 # RIA-specific criteria for evaluating impact assessments
@@ -91,7 +102,7 @@ EVALUATION_CRITERIA = [
     {
         "name": "completeness",
         "focus": "completeness of assessment",
-        "description": "Rank based on coverage of all 21 impact themes, comprehensive Background/Problem Definition, and thorough impact assessments"
+        "description": "Rank based on coverage of all 21 impact themes, comprehensive Executive Summary and Proposal Overview, and thorough impact assessments"
     },
     {
         "name": "balanced",

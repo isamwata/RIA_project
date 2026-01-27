@@ -11,6 +11,7 @@ wheels/
 
 # Keys and secrets
 .env
+.env.neo4j
 credentials/
 *.json
 !package.json
@@ -20,6 +21,12 @@ credentials/
 
 # Data files
 data/
+
+# Vector store (large binary files - use cloud storage or build scripts)
+vector_store/
+*.npy
+*.pkl
+!**/__pycache__/*.pkl
 
 # Frontend
 frontend/node_modules/

@@ -28,6 +28,20 @@ try:
 except ImportError:
     OPENAI_AVAILABLE = False
 
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except (ImportError, PermissionError, FileNotFoundError):
+    pass
+
+# Import API key from centralized module
+try:
+    from .api_keys import OPENAI_API_KEY
+except ImportError:
+    import os
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
 # Lazy import for sentence_transformers to avoid Keras issues when using OpenAI
 SENTENCE_TRANSFORMERS_AVAILABLE = None
 _SentenceTransformer = None
@@ -102,7 +116,28 @@ class VectorStore:
         if not use_local_model:
             if OPENAI_AVAILABLE:
                 print(f"📦 Using OpenAI embedding model: {embedding_model}")
-                self.embedding_model = OpenAI()
+                # Initialize OpenAI client with API key from environment
+                import os
+                # Try multiple ways to get the API key
+                api_key = None
+                if OPENAI_API_KEY:
+                    api_key = OPENAI_API_KEY
+                elif not api_key:
+                    api_key = os.getenv("OPENAI_API_KEY")
+                if not api_key:
+                    # Last resort: try loading .env again
+                    try:
+                        from dotenv import load_dotenv
+                        load_dotenv()
+                        api_key = os.getenv("OPENAI_API_KEY")
+                    except:
+                        pass
+                
+                if not api_key:
+                    raise RuntimeError(
+                        "OPENAI_API_KEY not found. Please set it in .env file or environment variable."
+                    )
+                self.embedding_model = OpenAI(api_key=api_key)
                 # text-embedding-3-small has 1536 dimensions
                 # text-embedding-ada-002 has 1536 dimensions
                 self.embedding_dim = 1536
